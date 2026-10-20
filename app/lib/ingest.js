@@ -142,7 +142,9 @@ function pptxToPdf(pptx, workDir) {
       fs.copyFileSync(outFile, pdf);
       return pdf;
     } catch (e) {
-      console.error('PowerPoint 转换失败，尝试 LibreOffice：', (e.stderr || e.message).toString().trim());
+      const msg = (e.stderr || e.message).toString().trim();
+      console.error('PowerPoint 转换失败，尝试 LibreOffice：', msg);
+      if (msg.includes('-9074')) console.error('提示：PowerPoint 没有访问权限。请切换到 PowerPoint，在弹出的"授予访问权限"窗口中点击允许，然后重新导入。');
     } finally { for (const f of [inFile, outFile]) fs.rmSync(f, { force: true }); }
   }
   if (kind === 'powerpoint-win') {

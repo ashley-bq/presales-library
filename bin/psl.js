@@ -148,6 +148,8 @@ async function main() {
         const { appendEvent } = await import('../app/lib/events.js');
         const { rel, LIB } = await import('../app/lib/paths.js');
         const patches = opt.file ? JSON.parse(fs.readFileSync(opt.file, 'utf8')) : { [pos[0]]: JSON.parse(opt.json) };
+        const missing = Object.keys(patches).filter((id) => !fs.existsSync(path.join(lib.slideDir(id), 'meta.json')));
+        if (missing.length) throw new Error(`找不到这些页面，未做任何修改：${missing.join(', ')}`);
         const done = Object.entries(patches).map(([id, p]) => lib.applyTags(id, p));
         const { file } = appendEvent('tag_edit', { slide_ids: done.map((d) => d.id), by: 'agent' });
         const git = commitAndPush([rel(LIB), rel(file)], `[打标] ${done.length} 页`);

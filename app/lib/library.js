@@ -21,7 +21,7 @@ export const saveMeta = (meta) => writeJson(path.join(slideDir(meta.id), 'meta.j
 
 export function listSlides() {
   if (!fs.existsSync(SLIDES)) return [];
-  return fs.readdirSync(SLIDES).map((id) => readJson(path.join(SLIDES, id, 'meta.json'))).filter(Boolean);
+  return fs.readdirSync(SLIDES).filter((id) => fs.existsSync(path.join(SLIDES, id, 'meta.json'))).map((id) => readJson(path.join(SLIDES, id, 'meta.json'))).filter(Boolean);
 }
 
 export function listDecks() {
