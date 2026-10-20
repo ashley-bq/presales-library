@@ -1,5 +1,5 @@
 {
-  "id": "tech-ai-platform-03-9702",
+  "id": "tech-ai-platform-03-1bd6",
   "title": "AI 中台总体架构（融合一页）",
   "text": "AI 中台总体架构（融合一页）\n应用层\n智能客服\n营销助手\n信贷审批助手\n运营数字员工\n能力层\n大模型网关\n知识库 RAG\n智能体编排\n模型评测\n数据层\n数据中台\n向量库\n权限与审计",
   "tags": {
@@ -13,18 +13,18 @@
   "scope": "universal",
   "origin": "original",
   "parent_id": null,
-  "root_id": "tech-ai-platform-03-9702",
+  "root_id": "tech-ai-platform-03-1bd6",
   "source": {
     "format": "pptx",
-    "deck_id": "2026-10-20-tech-ai-platform-852a",
+    "deck_id": "2026-10-20-tech-ai-platform-f321",
     "page": 3,
     "file": "tech-ai-platform.pptx",
-    "image": false
+    "image": true
   },
   "theme": "light",
   "tagged": false,
   "author": "Ashley <ashleyxu0926@gmail.com>",
-  "created_at": "2026-10-20T17:00:29.697Z",
-  "content_hash": "f6fb6649bba8e22c4d8e857c90907a38b7f1d5e3",
+  "created_at": "2026-10-20T17:05:43.828Z",
+  "content_hash": "ed819aa77476ed5c6b2dcde390239fabb486c576",
   "deck_title": "科技-AI中台建设方案（中小行）"
 }

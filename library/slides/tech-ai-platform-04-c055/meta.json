@@ -1,5 +1,5 @@
 {
-  "id": "tech-ai-platform-04-c0f3",
+  "id": "tech-ai-platform-04-c055",
   "title": "某农商行：智能客服上线 3 个月成效",
   "text": "某农商行：智能客服上线 3 个月成效\n问题解决率 86%\n坐席人力释放 59%\n客户满意度 +12 分",
   "tags": {
@@ -13,18 +13,18 @@
   "scope": "universal",
   "origin": "original",
   "parent_id": null,
-  "root_id": "tech-ai-platform-04-c0f3",
+  "root_id": "tech-ai-platform-04-c055",
   "source": {
     "format": "pptx",
-    "deck_id": "2026-10-20-tech-ai-platform-852a",
+    "deck_id": "2026-10-20-tech-ai-platform-f321",
     "page": 4,
     "file": "tech-ai-platform.pptx",
-    "image": false
+    "image": true
   },
   "theme": "light",
   "tagged": false,
   "author": "Ashley <ashleyxu0926@gmail.com>",
-  "created_at": "2026-10-20T17:00:29.698Z",
-  "content_hash": "dbe4438d6909539cd9cdf481cf64199521904b84",
+  "created_at": "2026-10-20T17:05:43.828Z",
+  "content_hash": "8e6f08f02fa5fa3f2849391286faef443146fa97",
   "deck_title": "科技-AI中台建设方案（中小行）"
 }
