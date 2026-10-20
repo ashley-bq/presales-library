@@ -1,0 +1,26 @@
+{
+  "name": "presales-library",
+  "version": "0.1.0",
+  "private": true,
+  "description": "售前素材库：按页入库、AI 打标、购物车拼装、使用与修改记录",
+  "type": "module",
+  "bin": {
+    "psl": "bin/psl.js"
+  },
+  "scripts": {
+    "start": "node bin/psl.js serve --open",
+    "doctor": "node bin/psl.js doctor",
+    "install-skill": "node bin/psl.js install-skill",
+    "samples": "node samples/build-samples.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "jszip": "3.10.2",
+    "pdfjs-dist": "6.4.299",
+    "playwright": "1.64.0",
+    "pptxgenjs": "4.0.1",
+    "yaml": "2.9.1"
+  }
+}

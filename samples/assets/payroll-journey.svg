@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640">
+  <defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#f5b800"/><stop offset="1" stop-color="#8a6a00"/></linearGradient></defs>
+  <rect width="1200" height="640" rx="28" fill="#1f2227"/>
+  <g font-family="PingFang SC, Microsoft YaHei, sans-serif" fill="#f3f3f0">
+    <text x="60" y="80" font-size="34" font-weight="700">代发客户经营旅程</text>
+    <g transform="translate(60,150)">
+      <rect width="240" height="150" rx="18" fill="#272a30" stroke="#f5b800" stroke-width="2"/><text x="30" y="65" font-size="30" font-weight="700">企业获客</text><text x="30" y="110" font-size="22" fill="#9a9da3">代发签约 · 场景嵌入</text>
+      <rect x="300" width="240" height="150" rx="18" fill="#272a30" stroke="#f5b800" stroke-width="2"/><text x="330" y="65" font-size="30" font-weight="700">员工激活</text><text x="330" y="110" font-size="22" fill="#9a9da3">开卡绑卡 · 首月权益</text>
+      <rect x="600" width="240" height="150" rx="18" fill="#272a30" stroke="#f5b800" stroke-width="2"/><text x="630" y="65" font-size="30" font-weight="700">资产提升</text><text x="630" y="110" font-size="22" fill="#9a9da3">工资理财 · 定投</text>
+      <rect x="900" width="180" height="150" rx="18" fill="url(#g)"/><text x="930" y="65" font-size="30" font-weight="700" fill="#141414">长期价值</text><text x="930" y="110" font-size="22" fill="#141414">AUM 留存</text>
+    </g>
+    <path d="M90 420 C 300 360, 520 520, 760 430 S 1080 380, 1140 410" stroke="#f5b800" stroke-width="5" fill="none"/>
+    <g fill="#9a9da3" font-size="22"><text x="70" y="480">月活 ↑</text><text x="420" y="520">交叉销售 ↑</text><text x="800" y="480">流失预警</text></g>
+    <text x="60" y="590" font-size="20" fill="#6b6e74">示例数据，仅用于演示</text>
+  </g>
+</svg>
