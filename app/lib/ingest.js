@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import JSZip from 'jszip';
 import { createSlide, newSlideId, saveDeck, slideDir, getSlide, saveMeta } from './library.js';
-import { renderSlides, pdfToJpegs } from './render.js';
+import { renderSlides, pdfToJpegs, pdfPages } from './render.js';
 import { appendEvent } from './events.js';
 import { commitAndPush, pull } from './git.js';
 import { identity } from './identity.js';
@@ -47,7 +47,7 @@ export async function ingestHtml(file, opts = {}) {
   const html = fs.readFileSync(file, 'utf8');
   const sections = html.match(SECTION_RE) || fail('没有找到 <section class="slide">，请按 slide-spec 组织 HTML');
   const baseDir = path.dirname(path.resolve(file));
-  const title = opts.title || decodeEntities((html.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '').trim() || path.basename(file, path.extname(file));
+  const title = opts.title || decodeEntities((html.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '').trim() || (opts.sourceName || path.basename(file)).replace(/\.[^.]+$/, '');
   const theme = opts.theme || (/<body[^>]*class=["'][^"']*theme-light/i.test(html) ? 'light' : 'dark');
   const prefix = asciiSlug(opts.slug || title);
   const deckId = `pending-${shortId()}`;
@@ -188,29 +188,69 @@ export async function importPptx(file, opts = {}) {
     if (pdf) images = await pdfToJpegs(pdf, path.join(work, 'img'));
   } catch (e) { console.error('渲染整页图失败：', e.message); }
 
-  const title = opts.title || path.basename(file, path.extname(file));
-  const prefix = asciiSlug(opts.slug || title);
+  try {
+    const res = await imageDeck(pages.map((pg, i) => ({ ...pg, image: images[i] })), opts, 'pptx', file);
+    return { ...res, rendered_images: images.length, renderer: pptxRenderer() };
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+/** 通用："HTML 主标题 + 整页图"的 deck。pages: [{title, text, notes?, image?}] */
+async function imageDeck(pages, opts, format, file) {
+  const fileName = opts.sourceName || path.basename(file);
+  const title = opts.title || fileName.replace(/\.[^.]+$/, '');
+  const prefix = asciiSlug(opts.slug || fileName.replace(/\.[^.]+$/, ''), format);
   const theme = opts.theme || 'light';
   const slides = pages.map((pg, i) => {
-    const t = pg.title || `第 ${i + 1} 页`;
-    const img = images[i];
+    const t = pg.title || `${title} 第 ${i + 1} 页`;
+    const ext = pg.image ? path.extname(pg.image).toLowerCase() || '.jpg' : '';
     const html = `<section class="slide layout-image-page" data-layout="image-page">
   <h2 data-editable>${escapeHtml(t)}</h2>
-  <div class="page-image">${img ? '<img src="assets/page.jpg" alt="" data-replaceable>' : '<p class="muted">（未能渲染原页图片：请安装 PowerPoint 或 LibreOffice 后重新导入）</p>'}</div>
+  <div class="page-image">${pg.image ? `<img src="assets/page${ext}" alt="" data-replaceable>` : '<p class="muted">（未能渲染原页图片：请安装 PowerPoint 或 LibreOffice 后重新导入）</p>'}</div>
 </section>`;
-    const s = createSlide({
-      id: newSlideId(prefix, i + 1), html, files: img ? [{ name: 'assets/page.jpg', src: img }] : [],
+    return createSlide({
+      id: newSlideId(prefix, i + 1), html, files: pg.image ? [{ name: `assets/page${ext}`, src: pg.image }] : [],
       meta: {
-        title: t, text: [pg.text, pg.notes && `备注：${pg.notes}`].filter(Boolean).join('\n'), theme,
+        title: t, text: [pg.text || t, pg.notes && `备注：${pg.notes}`].filter(Boolean).join('\n'), theme,
         customer: opts.customer || '', scope: opts.customer ? 'customer-specific' : 'universal',
-        source: { format: 'pptx', deck_id: null, page: i + 1, file: path.basename(file), image: !!img },
+        source: { format, deck_id: null, page: i + 1, file: pg.file || fileName, image: !!pg.image },
       },
     });
-    return s;
   });
-  fs.rmSync(work, { recursive: true, force: true });
-  const deck = deckRecord({ ...opts, title }, slides.map((s) => s.id), 'pptx', file);
+  const deck = deckRecord({ ...opts, title }, slides.map((s) => s.id), format, fileName);
   for (const s of slides) { s.source.deck_id = deck.id; s.deck_title = title; s.content_hash = contentHash(slideDir(s.id)); saveMeta(s); }
-  const res = await finish(deck, slides, 'pptx');
-  return { ...res, rendered_images: images.length, renderer: pptxRenderer() };
+  return finish(deck, slides, format);
+}
+
+/** PDF 入库：每页整页图 + 提取的标题与文字 */
+export async function importPdf(file, opts = {}) {
+  pull();
+  const work = path.join(CACHE, `pdf-${shortId(4)}`);
+  try {
+    const pages = await pdfPages(file, work);
+    if (!pages.length) fail('PDF 没有页面');
+    return await imageDeck(pages.map((p) => ({ title: p.title, text: p.text, image: p.file })), opts, 'pdf', file);
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+/** 图片入库：每张图一页，标题取文件名；files: [{path, name}] */
+export async function importImages(files, opts = {}) {
+  pull();
+  if (!files.length) fail('没有图片');
+  const pages = files.map((f) => {
+    const base = (f.name || path.basename(f.path)).replace(/\.[^.]+$/, '');
+    return { title: base, text: base, image: f.path, file: f.name || path.basename(f.path) };
+  });
+  return imageDeck(pages, { title: opts.title || (files.length === 1 ? pages[0].title : `图片素材 ${today()}`), ...opts, sourceName: opts.sourceName || files[0].name || path.basename(files[0].path) }, 'image', files[0].path);
+}
+
+export const IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg)$/i;
+
+/** 按扩展名分发入库 */
+export function ingestFile(file, opts = {}) {
+  const name = opts.sourceName || path.basename(file);
+  if (/\.pptx$/i.test(name)) return importPptx(file, opts);
+  if (/\.pdf$/i.test(name)) return importPdf(file, opts);
+  if (/\.html?$/i.test(name)) return ingestHtml(file, opts);
+  if (IMAGE_EXT.test(name)) return importImages([{ path: file, name }], opts);
+  fail(`不支持的文件类型：${name}（支持 PPTX / PDF / 图片 / HTML）`);
 }

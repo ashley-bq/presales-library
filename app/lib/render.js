@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
-import { CACHE, THEMES, ROOT } from './paths.js';
+import { CACHE, THEMES, NODE_MODULES } from './paths.js';
 import { shortId } from './util.js';
 
 const W = 1920, H = 1080;
@@ -68,10 +68,15 @@ export async function renderSlides(items) {
 
 /** 用 pdf.js 把 PDF 每页渲染为 JPEG（宽 1920），返回文件路径列表 */
 export async function pdfToJpegs(pdfPath, outDir, width = W) {
+  return (await pdfPages(pdfPath, outDir, width)).map((p) => p.file);
+}
+
+/** PDF 每页：{file, title, text}；标题取页面上半部分字号最大的一行 */
+export async function pdfPages(pdfPath, outDir, width = W) {
   const b = await browser();
   const page = await b.newPage();
   fs.mkdirSync(outDir, { recursive: true });
-  const pdfjs = path.join(ROOT, 'node_modules', 'pdfjs-dist', 'build');
+  const pdfjs = path.join(NODE_MODULES, 'pdfjs-dist', 'build');
   const host = path.join(CACHE, `pdf-${shortId(4)}.html`);
   fs.mkdirSync(CACHE, { recursive: true });
   fs.writeFileSync(host, `<!doctype html><meta charset="utf-8"><script type="module">
@@ -90,7 +95,7 @@ window.pdfjsLib = pdfjsLib;
     }, data);
     const out = [];
     for (let i = 1; i <= count; i++) {
-      const b64 = await page.evaluate(async ({ i, width }) => {
+      const r = await page.evaluate(async ({ i, width }) => {
         const p = await window._pdf.getPage(i);
         const vp0 = p.getViewport({ scale: 1 });
         const vp = p.getViewport({ scale: width / vp0.width });
@@ -99,11 +104,21 @@ window.pdfjsLib = pdfjsLib;
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
         await p.render({ canvasContext: ctx, viewport: vp, canvas }).promise;
-        return canvas.toDataURL('image/jpeg', 0.88).split(',')[1];
+        const tc = await p.getTextContent();
+        const items = tc.items.filter((t) => t.str && t.str.trim()).map((t) => ({ s: t.str, y: vp0.height - t.transform[5], size: Math.hypot(t.transform[2], t.transform[3]) }));
+        const lines = [];
+        for (const it of items) {
+          const last = lines[lines.length - 1];
+          if (last && Math.abs(last.y - it.y) < it.size * 0.6) { last.s += it.s; last.size = Math.max(last.size, it.size); } else lines.push({ ...it });
+        }
+        const upper = lines.filter((l) => l.y < vp0.height * 0.4);
+        const max = Math.max(0, ...upper.map((l) => l.size));
+        const title = upper.filter((l) => l.size >= max * 0.9).map((l) => l.s.trim()).join(' ');
+        return { b64: canvas.toDataURL('image/jpeg', 0.88).split(',')[1], title, text: lines.map((l) => l.s.trim()).join('\n') };
       }, { i, width });
       const f = path.join(outDir, `page-${String(i).padStart(3, '0')}.jpg`);
-      fs.writeFileSync(f, Buffer.from(b64, 'base64'));
-      out.push(f);
+      fs.writeFileSync(f, Buffer.from(r.b64, 'base64'));
+      out.push({ file: f, title: r.title.normalize('NFKC'), text: r.text.normalize('NFKC') });
     }
     return out;
   } finally {

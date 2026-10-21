@@ -40,7 +40,7 @@ export async function promoteDraft(id, { keys, note = '' } = {}) {
         tagged: !!parent,
         source: { format: parent?.source?.format === 'pptx' ? 'pptx' : 'html', deck_id: deckId, draft_id: id, page: d.slides.indexOf(d.slides.find((x) => x.key === s.key)) + 1 },
         deck_title: d.name,
-        modification: parent ? { diff: s.diff, note } : null,
+        modification: { diff: s.diff, note, by: me.display },
         ...(parent?.source?.format === 'pptx' ? { text: parent.text } : {}),
       },
     });

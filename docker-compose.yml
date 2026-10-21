@@ -1,0 +1,34 @@
+# 云服务器部署：docker compose up -d
+# 先复制 deploy/.env.example 为 .env 并填写；部署密钥放到 deploy/ssh/id_ed25519
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PSL_MODE: server
+      GIT_COMMITTER_NAME: presales-server
+      GIT_COMMITTER_EMAIL: presales-server@localhost
+    volumes:
+      - ./deploy/data:/data          # 素材仓库 clone、账号、会话密钥
+      - ./deploy/ssh:/run/ssh:ro     # GitHub 部署密钥（需要写权限）
+    expose:
+      - "4173"
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

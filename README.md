@@ -51,12 +51,45 @@ npm run doctor                      # 自检，全部 ok 即可
   - "XX 银行那个草稿讲完效果很好，入库"
   - "看看哪些页用得最多" / "这页被谁改过"
 
+## 配置 AI（网页内 AI 改写 / AI 自动打标）
+支持任意 **OpenAI 兼容接口**（DeepSeek、通义千问、豆包、OpenAI 等）。Key 只保存在本机 `.private/config.json`（不进仓库），或用环境变量 `PSL_LLM_BASE_URL / PSL_LLM_API_KEY / PSL_LLM_MODEL`：
+```bash
+node bin/psl.js config llm --base-url https://api.deepseek.com/v1 --api-key sk-xxxx --model deepseek-chat
+# 通义：--base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model qwen-plus
+# 豆包：--base-url https://ark.cn-beijing.volces.com/api/v3 --model <接入点ID>
+```
+配置后重启网页。每次 AI 改写都会写入使用日志（谁、什么要求、模型、改前改后），可在草稿编辑器撤销，并显示在该页的版本树中。
+
+## 云服务器部署（同事用网址 + 账号访问，无需安装）
+准备一台 Linux 云服务器（2 核 4G 以上，已装 Docker），以及可选的域名（解析到服务器 IP，自动申请 HTTPS 证书）。
+1. **生成部署密钥**，让服务器可以读写 GitHub 仓库：
+   ```bash
+   git clone git@github.com:ashley-bq/presales-library.git && cd presales-library   # 在服务器上，也可直接上传代码
+   mkdir -p deploy/ssh && ssh-keygen -t ed25519 -N "" -C presales-server -f deploy/ssh/id_ed25519
+   cat deploy/ssh/id_ed25519.pub
+   ```
+   把公钥添加到 GitHub 仓库 **Settings → Deploy keys → Add deploy key**，并勾选 **Allow write access**。
+2. **配置**：`cp deploy/.env.example .env`，填写 `PSL_DOMAIN`（没有域名就留空）和 AI 模型的 Key。
+3. **启动**：`docker compose up -d --build`（首次构建约 5–10 分钟）。
+4. **开通账号**（初始密码会打印出来，发给同事）：
+   ```bash
+   docker compose exec app node bin/psl.js user add zhangsan --name 张三 --email zhangsan@xx.com
+   docker compose exec app node bin/psl.js user list
+   docker compose exec app node bin/psl.js user passwd zhangsan      # 重置密码
+   ```
+5. 浏览器访问 `https://你的域名`（或 `http://服务器IP`），用账号登录。
+   - 服务器把素材、使用与修改记录推送到 GitHub；本地 Agent（Devin / Claude Code）用户照常 clone 仓库使用，两边通过 GitHub 自动同步（服务器每 5 分钟拉取一次）。
+   - 每个人的草稿只有自己可见；提交记录的作者就是登录的账号。
+   - 服务器上用 LibreOffice 渲染旧 PPTX（已内置中文字体），效果可能和 PowerPoint 略有差异。
+   - 更新代码：`git pull && docker compose up -d --build`。
+
 ## 网页功能
 | 页面 | 功能 |
 |---|---|
-| 素材库 | 搜索（需求/客户/关键词）、左侧多维筛选（条线/场景专题/内容类型/目标客户/汇报类型/客户/原创或微调/来源 deck），卡片显示使用次数；点卡片查看大图、改标签（可新增标签值）、版本树与修改记录 |
+| 素材库 | 搜索（需求/客户/关键词）、左侧多维筛选（同一维度内为"或"，不同维度为"且"；卡片上的标签也可点击筛选），卡片显示使用次数；点卡片查看大图、改标签（可新增标签值、AI 打标）、版本树与修改记录（含 AI 改写） |
+| 上传素材 | 拖拽上传 PPTX / PDF / 图片（多张图片合成一个 deck），自动入库并用 AI 打标，卡片上标"AI打标"，打开详情确认 |
 | 购物模式 | 勾选页面进入右侧购物车，拖拽排序，填写 deck 名和客户，选黑底/白底 → 生成草稿 |
-| 草稿编辑器 | 页面拖拽排序、从素材库插入、按版式新建页；点击文字直接编辑、点击图片替换；"复制 AI 改写指令"交给 Agent；导出 zip（离线 HTML 播放器，← → 翻页，F 全屏）/ PPTX（每页整图 + 备注）；"效果好，入库" |
+| 草稿编辑器 | 页面拖拽排序、从素材库插入、按版式新建页；点击文字直接编辑、点击图片替换；**AI 改写**（写要求或点快捷要求，可撤销，自动记录）或"复制给 Agent"；导出 zip（离线 HTML 播放器，← → 翻页，F 全屏）/ PPTX（每页整图 + 备注）；"效果好，入库" |
 | 使用排行 | 页面使用排行、客户案例热度、最近动态 |
 
 ## 命令行

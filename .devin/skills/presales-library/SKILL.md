@@ -29,7 +29,10 @@ allowed-tools:
   - 新做的 deck 必须遵循 `references/slide-spec.md`（每页一个 `<section class="slide">`，可编辑文字加 `data-editable`）。
 - 旧 PPTX：`psl import-pptx <file.pptx> --title "标题" --slug <英文短名>`
   - 主标题会转成 HTML 文字，整页渲染成一张图（Mac 用 PowerPoint，首次会弹"授予访问权限"，请提醒用户点允许；Windows 用 PowerPoint COM；否则用 LibreOffice）。
+- PDF：`psl import-pdf <file.pdf> …`；图片：`psl import-images a.png b.jpg … --title "标题"`（多张合成一个 deck）；或用 `psl ingest <文件>` 按扩展名自动选择。
+- 用户也可以在网页右上角"上传素材"里直接拖拽上传（支持 AI 自动打标）。
 - `--slug` 用 2–4 个英文/拼音单词（如 `retail-payroll`），用于生成页面 id。
+- 若已配置 AI 模型（`psl config llm` 显示 `enabled: true`），可直接 `psl ai-tag <id…>` 自动打标，然后检查结果、必要时用 `psl tag` 修正；否则按下面的步骤自己打标。
 - 入库输出中的 `untagged` 列出新页的标题和全文。**由你来打标**：
   1. `psl taxonomy` 查看标签体系（条线 / 场景专题 / 内容类型 / 目标客户 / 汇报类型）。
   2. 为每页写 JSON（可以使用新值，会自动加入标签体系，但优先复用已有值）：
@@ -54,11 +57,17 @@ allowed-tools:
 
 ## 3. 改写某页（AI 改写）
 
-用户会粘贴网页上"复制 AI 改写指令"的内容，形如 `改写草稿 <draftId> 第 N 页（key=…，文件 drafts/<draftId>/slides/<key>/slide.html）：<要求>`。
-1. `psl draft path <draftId>` 找到该页的 `html_file`；读取它和 `library/themes/theme.css`、`references/slide-spec.md`。
-2. 直接编辑这个 slide.html：保持唯一的根元素 `<section class="slide …" data-layout="…">`，保留 `data-editable` / `data-replaceable` 标记，只用主题里的 class 和 CSS 变量，图片放同目录 `assets/`。
-3. 不要改 draft.json 里的 `source_id`/`base_hash`（系统靠它判断"微调"和记录修改）。
-4. 保存后网页会自动刷新；告诉用户改了什么。
+用户会粘贴网页上"复制给 Agent"的内容，形如 `改写草稿 <draftId> 第 N 页（key=…，文件 drafts/<draftId>/slides/<key>/slide.html）：<要求>`。
+（用户也可以直接在网页里点"AI 改写"，由服务器调用配置好的模型完成。）
+
+**每次 AI 改写都必须留下记录**，按以下顺序：
+1. `psl draft checkpoint <draftId> <key>`（打检查点，输出 `html_file`）；读取该文件以及 `library/themes/theme.css`、`references/slide-spec.md`。
+2. 编辑这个 slide.html：保持唯一的根元素 `<section class="slide …" data-layout="…">`，保留 `data-editable` / `data-replaceable` 标记，只用主题里的 class 和 CSS 变量，图片放同目录 `assets/`。
+3. 改完立即记录：`psl draft log-edit <draftId> <key> --instruction "<用户的改写要求>" --by "<你的名字，如 Devin>"`。
+   这会写入使用日志（谁、什么要求、改前改后标题、增删的文字），在网页的版本树和该页的"AI 改写记录"中可见，也可在网页上撤销。
+4. 不要改 draft.json 里的 `source_id`/`base_hash`/`ai_edits`（系统靠它判断"微调"和记录修改）。
+5. 网页会自动刷新；告诉用户改了什么。
+- 如果已配置模型且用户只想快速改一页，也可以用 `psl ai-rewrite <draftId> <key> --instruction "要求"`（同样会记录）。
 - 只改草稿，**不要**直接改 `library/slides/` 下的页面。
 
 ## 4. 导出与"讲完再入库"
@@ -70,7 +79,7 @@ allowed-tools:
 ## 5. 统计与追溯
 
 - `psl stats`：页面使用排行（导出次数、使用人、讲给哪些客户、被临时修改次数）和客户案例热度。
-- `psl history <slideId>`：版本树（原创 → 微调）以及每次临时修改的记录。
+- `psl history <slideId>`：版本树（原创 → 微调）、每次临时修改的记录，以及每次 AI 改写（`ai_edits`：要求、模型、改动）。
 - `psl show <slideId>`：元数据、HTML 文件路径、版本树。
 - 用中文简洁汇总给用户，必要时用表格。
 

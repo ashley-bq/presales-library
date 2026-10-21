@@ -1,0 +1,10 @@
+# 有域名时自动申请 HTTPS 证书；PSL_DOMAIN 留空则只用 http://服务器IP
+{$PSL_DOMAIN::80} {
+	encode gzip
+	request_body {
+		max_size 300MB
+	}
+	reverse_proxy app:4173 {
+		flush_interval -1
+	}
+}

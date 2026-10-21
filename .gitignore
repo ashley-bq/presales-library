@@ -1,7 +1,11 @@
 node_modules/
 .cache/
+.private/
 drafts/
 exports/
 .DS_Store
 Thumbs.db
 ~$*
+deploy/data/
+deploy/ssh/
+.env

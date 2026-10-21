@@ -6,7 +6,14 @@ import { readJson, writeJson, shortId, contentHash, htmlToText, htmlTitle, nowIs
 import { identity } from './identity.js';
 
 export const loadTaxonomy = () => YAML.parse(fs.readFileSync(TAXONOMY, 'utf8'));
-export const saveTaxonomy = (t) => fs.writeFileSync(TAXONOMY, YAML.stringify(t));
+const yamlScalar = (v) => (/^[\p{L}\p{N}_\-（）()·/]+$/u.test(v) ? v : JSON.stringify(v));
+export const saveTaxonomy = (t) => fs.writeFileSync(TAXONOMY, [
+  '# 标签体系：入库时由 Agent/AI 按此打标；网页中可修改、可新增取值（会写回本文件）',
+  'dimensions:',
+  ...t.dimensions.map((d) => `  - key: ${yamlScalar(d.key)}\n    values: [${d.values.map(yamlScalar).join(', ')}]`),
+  YAML.stringify({ scopes: t.scopes }).trimEnd(),
+  '',
+].join('\n'));
 
 export function addTaxonomyValue(dim, value) {
   const t = loadTaxonomy();
@@ -99,6 +106,7 @@ export function applyTags(id, patch) {
   }
   for (const k of ['customer', 'scope', 'title']) if (patch[k] !== undefined) meta[k] = patch[k];
   meta.tagged = true;
+  meta.tag_source = patch.tag_source || 'manual';
   saveMeta(meta);
   return meta;
 }

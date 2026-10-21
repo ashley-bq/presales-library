@@ -3,15 +3,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ROOT, SKILL_DIR, SLIDES } from '../app/lib/paths.js';
+import { ROOT, CODE_ROOT, SKILL_DIR, SLIDES } from '../app/lib/paths.js';
 import { readJson } from '../app/lib/util.js';
 
 const HELP = `psl —— 售前素材库命令行（所有输出为 JSON）
 
 素材库
   psl serve [--port 4173] [--open]           启动本地网页
+  psl serve --server [--host 0.0.0.0]        服务器模式：多人通过网址访问，需账号登录
+  psl ingest <文件>                           按扩展名自动入库（PPTX / PDF / 图片 / HTML）
   psl ingest-html <deck.html> [--title T] [--customer C] [--theme dark|light] [--slug ascii-slug] [--report-type 交流]
   psl import-pptx <deck.pptx> [同上参数]       旧 PPTX 入库：HTML 主标题 + 整页图
+  psl import-pdf <file.pdf> [同上参数]         PDF 入库：每页整页图 + 提取的文字
+  psl import-images <a.png> [b.jpg …] [同上参数]  图片入库：每张一页
+  psl ai-tag [slideId …]                     AI 自动打标（默认对所有待打标页）
+AI 与配置
+  psl config llm --base-url https://api.deepseek.com/v1 --api-key sk-… --model deepseek-chat   配置 OpenAI 兼容模型
+  psl ai-rewrite <draftId> <key> --instruction "改写要求"   AI 改写草稿中的一页（记录到使用日志）
+  psl ai-undo <draftId> <key>                撤销最近一次 AI 改写
+  psl user add <用户名> --name 姓名 --email 邮箱 [--password P] [--admin] | user list | user passwd <用户名> | user remove <用户名>（服务器模式账号）
   psl untagged                               列出待打标页面（含全文）
   psl tag <slideId> --json '{"tags":{"条线":["零售"]},"customer":"","scope":"universal"}'
   psl tag --file tags.json                   批量打标：{"<slideId>": {tags, customer, scope}, ...}
@@ -23,6 +33,8 @@ const HELP = `psl —— 售前素材库命令行（所有输出为 JSON）
   psl draft list | show <draftId> | path <draftId>
   psl draft insert <draftId> (--source <slideId> | --layout <cover|section|bullets|method|data|case|compare|fusion|image-text>) [--pos 0]
   psl draft remove <draftId> <key> | order <draftId> key1,key2,... | set <draftId> [--name] [--customer] [--theme]
+  psl draft checkpoint <draftId> <key>       Agent 改写前打检查点
+  psl draft log-edit <draftId> <key> --instruction "要求" --by "Devin"   Agent 改完后记录本次 AI 改写（可在网页撤销）
   psl export <draftId> [--formats zip,pptx]   导出并记录一次使用
   psl promote <draftId> [--keys k1,k2] [--note 说明]   讲完效果好：改过的页入库为"微调"
 统计与维护
@@ -67,7 +79,7 @@ async function doctor() {
     const ls = run('git', ['ls-remote', '--heads', 'origin']);
     add('远程仓库可访问', typeof ls === 'string', typeof ls === 'string' ? '可访问' : ls.error, '确认仓库地址正确，且你的 GitHub 账号已被邀请为 Collaborator');
   }
-  add('依赖已安装', fs.existsSync(path.join(ROOT, 'node_modules', 'playwright')), '', 'npm install');
+  add('依赖已安装', fs.existsSync(path.join(CODE_ROOT, 'node_modules', 'playwright')), '', 'npm install');
   try {
     const { browser, closeBrowser } = await import('../app/lib/render.js');
     await browser(); await closeBrowser();
@@ -77,7 +89,7 @@ async function doctor() {
   const r = pptxRenderer();
   add('旧 PPTX 渲染工具', !!r, r || '未找到 PowerPoint / LibreOffice', '安装 Microsoft PowerPoint 或 LibreOffice（否则旧 PPTX 只能导入文字）');
   const conf = readJson(path.join(os.homedir(), '.presales-library.json'));
-  add('Skill 已安装', conf?.root === ROOT, conf?.root || '未安装', 'npm run install-skill');
+  add('Skill 已安装', conf?.root === CODE_ROOT, conf?.root || '未安装', 'npm run install-skill');
   return { ok: checks.every((c) => c.ok || c.name === '旧 PPTX 渲染工具'), checks };
 }
 
@@ -103,20 +115,20 @@ function installSkill() {
       results.push({ target: link, status: '已链接' });
     } catch (e) { results.push({ target: link, status: '失败', error: e.message }); }
   }
-  fs.writeFileSync(path.join(home, '.presales-library.json'), JSON.stringify({ root: ROOT }, null, 2));
+  fs.writeFileSync(path.join(home, '.presales-library.json'), JSON.stringify({ root: CODE_ROOT }, null, 2));
   let shim = null;
   if (process.platform !== 'win32') {
     const bin = path.join(home, '.local', 'bin');
     fs.mkdirSync(bin, { recursive: true });
     shim = path.join(bin, 'psl');
-    fs.writeFileSync(shim, `#!/bin/sh\nexec node "${path.join(ROOT, 'bin', 'psl.js')}" "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(shim, `#!/bin/sh\nexec node "${path.join(CODE_ROOT, 'bin', 'psl.js')}" "$@"\n`, { mode: 0o755 });
   } else {
     const bin = path.join(home, '.local', 'bin');
     fs.mkdirSync(bin, { recursive: true });
     shim = path.join(bin, 'psl.cmd');
-    fs.writeFileSync(shim, `@node "${path.join(ROOT, 'bin', 'psl.js')}" %*\r\n`);
+    fs.writeFileSync(shim, `@node "${path.join(CODE_ROOT, 'bin', 'psl.js')}" %*\r\n`);
   }
-  return { skill: results, config: path.join(home, '.presales-library.json'), shim, note: `若命令行找不到 psl，可把 ${path.dirname(shim)} 加入 PATH，或直接使用 node "${path.join(ROOT, 'bin', 'psl.js')}"` };
+  return { skill: results, config: path.join(home, '.presales-library.json'), shim, note: `若命令行找不到 psl，可把 ${path.dirname(shim)} 加入 PATH，或直接使用 node "${path.join(CODE_ROOT, 'bin', 'psl.js')}"` };
 }
 
 async function main() {
@@ -124,16 +136,50 @@ async function main() {
   const { pos, opt } = parseArgs(rest);
   if (!cmd || cmd === 'help' || opt.help) return console.log(HELP);
 
-  if (cmd === 'where') return out({ root: ROOT, skill: path.join(SKILL_DIR, 'SKILL.md') });
+  if (cmd === 'where') return out({ root: CODE_ROOT, data: ROOT, skill: path.join(SKILL_DIR, 'SKILL.md') });
   if (cmd === 'doctor') return out(await doctor());
   if (cmd === 'install-skill') return out(installSkill());
-  if (cmd === 'serve') { const { serve } = await import('../app/server.js'); serve({ port: Number(opt.port) || 4173, open: !!opt.open }); return; }
+  if (cmd === 'serve') {
+    const { serve } = await import('../app/server.js');
+    serve({ port: Number(opt.port || process.env.PSL_PORT) || 4173, host: opt.host, open: !!opt.open, server: !!opt.server });
+    return;
+  }
+  if (cmd === 'config') {
+    const { saveConfig, loadConfig, llmEnabled } = await import('../app/lib/config.js');
+    if (pos[0] === 'llm' && (opt['base-url'] || opt['api-key'] || opt.model)) {
+      const patch = {};
+      if (opt['base-url']) patch.base_url = opt['base-url'];
+      if (opt['api-key']) patch.api_key = opt['api-key'];
+      if (opt.model) patch.model = opt.model;
+      saveConfig({ llm: patch });
+    }
+    const c = loadConfig();
+    return out({ llm: { base_url: c.llm.base_url, model: c.llm.model, api_key: c.llm.api_key ? `已配置（…${c.llm.api_key.slice(-4)}）` : '未配置', enabled: llmEnabled() } });
+  }
+  if (cmd === 'user') {
+    const auth = await import('../app/lib/auth.js');
+    const [sub, username] = pos;
+    if (sub === 'add') return out(auth.addUser({ username, name: opt.name, email: opt.email, password: opt.password, role: opt.admin ? 'admin' : 'member' }));
+    if (sub === 'passwd') return out(auth.setPassword(username, opt.password));
+    if (sub === 'remove') return out(auth.removeUser(username));
+    return out(auth.listUsers());
+  }
 
   const { buildIndex, filterSlides, history, usageRanking } = await import('../app/lib/indexer.js');
   const lib = await import('../app/lib/library.js');
   const { closeBrowser } = await import('../app/lib/render.js');
   try {
     switch (cmd) {
+      case 'ingest': { const { ingestFile } = await import('../app/lib/ingest.js'); return out(await ingestFile(pos[0], ingestOpts(opt))); }
+      case 'import-pdf': { const { importPdf } = await import('../app/lib/ingest.js'); return out(await importPdf(pos[0], ingestOpts(opt))); }
+      case 'import-images': { const { importImages } = await import('../app/lib/ingest.js'); return out(await importImages(pos.map((p) => ({ path: p, name: path.basename(p) })), ingestOpts(opt))); }
+      case 'ai-tag': {
+        const { autoTag } = await import('../app/lib/ai.js');
+        const ids = pos.length ? pos : lib.listSlides().filter((s) => !s.tagged).map((s) => s.id);
+        return out({ tagged: await autoTag(ids) });
+      }
+      case 'ai-rewrite': { const { rewriteSlide } = await import('../app/lib/ai.js'); return out(await rewriteSlide(pos[0], pos[1], opt.instruction || pos.slice(2).join(' '))); }
+      case 'ai-undo': { const { undoAiEdit } = await import('../app/lib/ai.js'); return out(undoAiEdit(pos[0], pos[1])); }
       case 'ingest-html': { const { ingestHtml } = await import('../app/lib/ingest.js'); return out(await ingestHtml(pos[0], ingestOpts(opt))); }
       case 'import-pptx': { const { importPptx } = await import('../app/lib/ingest.js'); return out(await importPptx(pos[0], ingestOpts(opt))); }
       case 'render-thumbs': {
@@ -185,6 +231,8 @@ async function main() {
         if (sub === 'remove') { dr.removeSlide(id, key); return out(dr.getDraft(id)); }
         if (sub === 'order') return out(dr.updateDraft(id, { order: list(key) }));
         if (sub === 'set') return out(dr.updateDraft(id, { name: opt.name, customer: opt.customer, theme: opt.theme }));
+        if (sub === 'checkpoint') { const { checkpoint } = await import('../app/lib/ai.js'); return out(checkpoint(id, key)); }
+        if (sub === 'log-edit') { const { logAgentEdit } = await import('../app/lib/ai.js'); return out(logAgentEdit(id, key, opt.instruction, opt.by || 'agent')); }
         throw new Error('未知的 draft 子命令');
       }
       default: console.log(HELP); process.exitCode = 1;

@@ -8,6 +8,7 @@ async function api(path, { method = 'GET', json, body, headers = {} } = {}) {
     headers: json !== undefined ? { 'Content-Type': 'application/json', ...headers } : headers,
   });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && j.login) { location.href = '/login.html'; throw new Error('请先登录'); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
@@ -93,7 +94,8 @@ function topbar(extra = []) {
     h('div', { class: 'me' },
       h('span', { class: `dot ${syncState}`, title: syncTitle }),
       h('a', { href: '#', title: syncTitle, onclick: run(async (e) => { e.preventDefault(); const r = await api('/sync', { method: 'POST' }); toast(r.pull.ok ? '已同步' : `同步失败：${r.pull.error}`, !r.pull.ok); await loadIndex(); route(); }) }, '同步'),
-      me.name ? `${me.name}` : h('span', { style: { color: 'var(--red)' } }, '未设置 Git 身份')));
+      me.name ? `${me.name}` : h('span', { style: { color: 'var(--red)' } }, '未设置 Git 身份'),
+      S.index?.mode === 'server' && h('a', { href: '#', onclick: run(async (e) => { e.preventDefault(); await api('/logout'); location.href = '/login.html'; }) }, '退出')));
 }
 
 // ---------- 素材库 ----------
@@ -106,6 +108,7 @@ function libraryView() {
       h('div', { class: 'counts' }, `${c.slides} 页 · ${S.index.decks} decks · ${c.exports} 次使用${c.untagged ? ` · ${c.untagged} 页待打标` : ''}`),
       h('div', { class: 'search' }, search),
       h('div', { class: 'spacer' }),
+      h('button', { class: 'btn primary', onclick: openUpload }, '上传素材'),
       h('button', { class: 'btn ' + (S.selecting ? 'active' : ''), onclick: () => { S.selecting = !S.selecting; route(); } }, S.selecting ? '退出选择' : `购物模式${S.cart.items.length ? `（${S.cart.items.length}）` : ''}`),
       h('button', { class: 'btn ghost', onclick: () => { location.hash = '#/stats'; } }, '使用排行'),
       h('button', { class: 'btn ghost', onclick: () => { location.hash = '#/drafts'; } }, '我的草稿'),
@@ -120,19 +123,38 @@ function libraryView() {
   if (S.selecting) renderCart();
 }
 
-const doSearch = run(async () => {
-  const hasFilter = Object.values(S.filters).some((v) => v.length);
-  S.results = (S.q.trim() || hasFilter)
-    ? (await api(`/search?q=${encodeURIComponent(S.q)}&filters=${encodeURIComponent(JSON.stringify(S.filters))}`)).map((id) => S.byId[id]).filter(Boolean)
-    : S.index.slides;
-  renderSide(); renderGrid();
-});
+const facetValues = (s, dim) => dim === '来源 deck' ? [s.deck_title] : dim === '客户' ? [s.customer] : dim === '来源' ? [s.origin === 'derived' ? '微调' : '原创'] : (s.tags?.[dim] || []);
+const matchFilters = (s, skipDim) => Object.entries(S.filters).every(([dim, vals]) => dim === skipDim || !vals?.length || vals.some((v) => facetValues(s, dim).includes(v)));
 
+// 关键词检索走服务端（全文），标签筛选在浏览器里即时完成
+let searchSeq = 0, lastQ = null, lastHits = null;
+const doSearch = run(async () => {
+  const q = S.q.trim();
+  const seq = ++searchSeq;
+  let base = S.index.slides;
+  if (q) {
+    if (q !== lastQ) { lastHits = await api(`/search?q=${encodeURIComponent(q)}`); lastQ = q; }
+    if (seq !== searchSeq) return;
+    base = lastHits.map((id) => S.byId[id]).filter(Boolean);
+  }
+  S.base = base;
+  S.results = base.filter((s) => matchFilters(s));
+  if ($side?.isConnected) renderSide();
+  if ($grid?.isConnected) renderGrid();
+});
+const toggleFilter = (dim, v, on) => {
+  const cur = new Set(S.filters[dim] || []);
+  (on ?? !cur.has(v)) ? cur.add(v) : cur.delete(v);
+  S.filters[dim] = [...cur];
+  doSearch();
+};
+
+/** 分面计数：同一维度内为"或"，所以计数时忽略本维度自身的勾选 */
 function facetCounts(dim) {
   const counts = {};
-  for (const s of S.results) {
-    const vals = dim === '来源 deck' ? [s.deck_title] : dim === '客户' ? [s.customer] : dim === '来源' ? [s.origin === 'derived' ? '微调' : '原创'] : (s.tags?.[dim] || []);
-    for (const v of vals) if (v) counts[v] = (counts[v] || 0) + 1;
+  for (const s of S.base || S.index.slides) {
+    if (!matchFilters(s, dim)) continue;
+    for (const v of facetValues(s, dim)) if (v) counts[v] = (counts[v] || 0) + 1;
   }
   return counts;
 }
@@ -150,18 +172,17 @@ function renderSide() {
       open && values.map((v) => {
         const on = (S.filters[dim] || []).includes(v);
         return h('label', { class: !counts[v] && !on ? 'zero' : '' },
-          h('input', { type: 'checkbox', checked: on, onchange: (e) => {
-            const cur = new Set(S.filters[dim] || []);
-            e.target.checked ? cur.add(v) : cur.delete(v);
-            S.filters[dim] = [...cur];
-            doSearch();
-          } }), v, h('span', { class: 'n' }, counts[v] || 0));
+          h('input', { type: 'checkbox', checked: on, onchange: (e) => toggleFilter(dim, v, e.target.checked) }), v, h('span', { class: 'n' }, counts[v] || 0));
       }));
   }));
 }
 
-function card(s, { onclick, selected, showCheck } = {}) {
-  const tags = Object.values(s.tags || {}).flat().slice(0, 4);
+function card(s, { onclick, selected, showCheck, tagFilter = true } = {}) {
+  const tags = Object.entries(s.tags || {}).flatMap(([d, vs]) => vs.map((v) => [d, v])).slice(0, 5);
+  const tagChip = ([d, v]) => h('span', {
+    class: 'chip y' + (tagFilter ? ' tagopt' : '') + ((S.filters[d] || []).includes(v) ? ' on' : ''), title: tagFilter ? `${d}：点击筛选` : d,
+    onclick: tagFilter ? (e) => { e.stopPropagation(); toggleFilter(d, v); } : null,
+  }, v);
   return h('div', { class: 'card' + (selected ? ' sel' : ''), onclick },
     h('div', { class: 'thumb', style: { backgroundImage: `url("${thumbUrl(s)}")` } }),
     showCheck && h('div', { class: 'check' }, selected ? '✓' : ''),
@@ -172,7 +193,8 @@ function card(s, { onclick, selected, showCheck } = {}) {
         h('span', { class: 'chip ' + (s.origin === 'derived' ? 'b' : 'g') }, s.origin === 'derived' ? '微调' : '原创'),
         h('span', { class: 'chip ' + (s.scope === 'customer-specific' ? 'r' : '') }, s.scope === 'customer-specific' ? 'customer-specific' : 'universal'),
         !s.tagged && h('span', { class: 'chip y' }, '待打标'),
-        tags.map((t) => h('span', { class: 'chip y' }, t))),
+        s.tag_source === 'ai' && h('span', { class: 'chip b', title: 'AI 自动打标，打开详情确认后变为人工标签' }, 'AI打标'),
+        tags.map(tagChip)),
       h('div', { class: 'foot' },
         h('span', { title: s.id }, s.id),
         h('span', {}, s.customer ? `客户：${s.customer}` : ''),
@@ -230,6 +252,59 @@ function renderCart() {
   dragList(items, '.cart-item', (from, to) => { S.cart.items = move(S.cart.items, from, to); saveCart(); renderCart(); });
 }
 
+// ---------- 上传素材 ----------
+const fmtSize = (n) => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+function openUpload() {
+  const files = [];
+  const list = h('div', { class: 'up-list' });
+  const status = h('div', { class: 'hint' });
+  const llm = S.index.llm?.enabled;
+  const form = { title: '', customer: '', theme: 'light', report_type: '', auto_tag: llm };
+  const renderList = () => fill(list, files.length ? files.map((f, i) => h('div', { class: 'up-item' },
+    h('span', {}, /\.pptx$/i.test(f.name) ? 'PPTX' : /\.pdf$/i.test(f.name) ? 'PDF' : /\.html?$/i.test(f.name) ? 'HTML' : '图片'),
+    h('b', {}, f.name), h('span', { class: 'hint' }, fmtSize(f.size)),
+    h('button', { class: 'x', onclick: () => { files.splice(i, 1); renderList(); } }, '×'))) : h('div', { class: 'hint' }, '还没有选择文件'));
+  const add = (fl) => { for (const f of fl) if (/\.(pptx|pdf|html?|png|jpe?g|webp|gif|svg)$/i.test(f.name)) files.push(f); else toast(`不支持的文件：${f.name}`, true); renderList(); };
+  const picker = h('input', { type: 'file', multiple: true, accept: '.pptx,.pdf,.html,.htm,image/*', style: { display: 'none' }, onchange: (e) => add(e.target.files) });
+  const drop = h('div', { class: 'drop', onclick: () => picker.click(),
+    ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'),
+    ondrop: (e) => { e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); } },
+  h('b', {}, '拖拽文件到这里，或点击选择'), h('div', { class: 'hint' }, 'PPTX（主标题转文字 + 整页图）· PDF（每页整页图 + 文字）· 图片（每张一页）；多张图片合成一个 deck'));
+  const field = (k, ph) => h('input', { class: 'input', placeholder: ph, oninput: (e) => { form[k] = e.target.value; } });
+  const go = h('button', { class: 'btn primary', onclick: run(async () => {
+    if (!files.length) return toast('请先选择文件', true);
+    go.disabled = true;
+    try {
+      const items = [];
+      for (const [i, f] of files.entries()) {
+        fill(status, `上传中 ${i + 1}/${files.length}：${f.name}`);
+        items.push(await api(`/upload?name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f, headers: { 'Content-Type': 'application/octet-stream' } }));
+      }
+      fill(status, `入库中…（PPTX/PDF 需要逐页渲染${form.auto_tag ? '，随后 AI 自动打标' : ''}，请稍候）`);
+      const r = await api('/upload/ingest', { method: 'POST', json: { items: items.map((x) => ({ token: x.token, name: x.name })), ...form } });
+      await loadIndex();
+      const ids = r.decks.flatMap((d) => d.slides.map((s) => s.id));
+      m.remove();
+      S.filters = {}; S.q = '';
+      route();
+      const msg = `已入库 ${ids.length} 页` + (r.auto_tagged ? `，AI 已打标 ${r.auto_tagged} 页（卡片上标"AI打标"，点开详情确认）` : r.tag_error ? `；AI 打标失败：${r.tag_error}` : '；请打开详情手动打标');
+      toast(msg, !!r.tag_error, 8000);
+      if (r.decks.some((d) => d.rendered_images === 0)) toast('有 PPTX 未能渲染整页图：Mac 请在 PowerPoint 弹窗中"授予访问权限"后重新上传', true, 10000);
+    } finally { go.disabled = false; }
+  }) }, '开始入库');
+  const m = modal('上传素材', h('div', { class: 'upload' },
+    drop, picker, list,
+    h('div', { class: 'grid-form' },
+      field('title', 'deck 标题（可选，默认取文件名）'), field('customer', '客户（客户专属材料才填）'),
+      h('select', { class: 'input', onchange: (e) => { form.theme = e.target.value; } }, h('option', { value: 'light' }, '旧材料页面用白底'), h('option', { value: 'dark' }, '旧材料页面用黑底')),
+      h('select', { class: 'input', onchange: (e) => { form.report_type = e.target.value; } }, h('option', { value: '' }, '汇报类型（可选）'), ...(S.index.taxonomy.dimensions.find((d) => d.key === '汇报类型')?.values || []).map((v) => h('option', { value: v }, v)))),
+    h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+      h('input', { type: 'checkbox', checked: form.auto_tag, disabled: !llm, onchange: (e) => { form.auto_tag = e.target.checked; } }),
+      llm ? `入库后用 AI 自动打标（${S.index.llm.model}）` : 'AI 自动打标不可用：管理员需先配置模型（psl config llm …）'),
+    h('div', { class: 'bar2' }, status, h('div', { class: 'spacer' }), go)));
+  renderList();
+}
+
 // ---------- 详情抽屉 ----------
 const openDetail = run(async (id) => {
   document.querySelectorAll('.drawer, .drawer-mask').forEach((x) => x.remove());
@@ -262,7 +337,15 @@ const openDetail = run(async (id) => {
     n.modifications.length ? h('div', { class: 'mods' }, n.modifications.map((m) => h('div', {},
       `✎ ${fmtTime(m.ts)} ${who(m.user)} 在「${m.deck_name}」${m.customer ? `（${m.customer}）` : ''}中临时修改：`,
       [m.diff?.title && `标题「${m.diff.title[0]}」→「${m.diff.title[1]}」`, m.diff?.text_changed && '改文字', m.diff?.image_replaced && '换图'].filter(Boolean).join('、') || '内容调整',
+      m.diff?.ai_edits?.length ? `（其中 AI 改写 ${m.diff.ai_edits.length} 次）` : '',
       m.promoted_as ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); openDetail(m.promoted_as); } }, ' → 已入库') : ''))) : null,
+    n.ai_edits?.length ? h('div', { class: 'mods' }, n.ai_edits.map((a) => h('div', { class: 'ai-rec' },
+      a.type === 'ai_undo' ? `↶ ${fmtTime(a.ts)} ${who(a.user)} 撤销了 AI 改写「${a.instruction}」`
+        : [`🤖 ${fmtTime(a.ts)} ${who(a.user)} 在「${a.deck_name}」${a.customer ? `（${a.customer}）` : ''}中 AI 改写：「${a.instruction}」`,
+          a.before_title !== a.after_title ? h('div', { class: 'hint' }, `标题：${a.before_title} → ${a.after_title}`) : null,
+          a.changes?.added?.length ? h('div', { class: 'hint' }, `新增：${a.changes.added.slice(0, 3).join(' / ')}${a.changes.added.length > 3 ? ' …' : ''}`) : null,
+          h('div', { class: 'hint' }, `模型：${a.model || '—'}`)]))) : null,
+    n.modification?.diff?.ai_edits?.length ? h('div', { class: 'mods' }, `本页入库前经过 AI 改写：${n.modification.diff.ai_edits.map((x) => `「${x.instruction}」`).join('、')}`) : null,
     n.children.length ? h('ul', {}, n.children.map(treeNode)) : null);
 
   const drawer = h('div', { class: 'drawer' },
@@ -287,7 +370,12 @@ const openDetail = run(async (id) => {
       h('button', { class: 'btn primary', onclick: run(async () => {
         await api(`/slide/${encodeURIComponent(s.id)}/tags`, { method: 'POST', json: { tags, customer, scope } });
         toast('标签已保存并同步'); await loadIndex(); close(); if (location.hash.startsWith('#/stats')) route(); else doSearch();
-      }) }, '保存标签')),
+      }) }, s.tag_source === 'ai' ? '确认标签' : '保存标签'), ' ',
+      S.index.llm?.enabled && h('button', { class: 'btn', onclick: run(async (e) => {
+        e.target.disabled = true; e.target.textContent = 'AI 打标中…';
+        await api('/ai/tag', { method: 'POST', json: { ids: [s.id] } });
+        await loadIndex(); toast('AI 已重新打标，请确认'); openDetail(s.id);
+      }) }, 'AI 打标')),
     h('div', { class: 'sec' }, h('h4', {}, '版本树与修改记录'), h('div', { class: 'tree' }, h('ul', {}, treeNode(history.tree)))),
     h('div', { class: 'sec' }, h('h4', {}, '全文'), h('pre', { style: { whiteSpace: 'pre-wrap', color: 'var(--text-2)', fontSize: '12px', fontFamily: 'inherit' } }, s.text)));
   document.body.append(mask, drawer);
@@ -397,10 +485,46 @@ function renderStage() {
       h('button', { class: 'btn sm', onclick: run(async () => {
         const text = `/presales-library 改写草稿 ${D.id} 第 ${n} 页（key=${s.key}，文件 drafts/${D.id}/slides/${s.key}/slide.html）：\n<在这里写修改要求，例如：把案例换成 ${D.customer || 'XX银行'} 的代发数据，语气更偏方法论>`;
         await navigator.clipboard.writeText(text); toast('已复制，粘贴给 Agent 并补充修改要求；改完网页会自动刷新');
-      }) }, '复制 AI 改写指令')),
+      }) }, '复制给 Agent')),
     editFrame,
-    h('div', { class: 'hint' }, '直接点击文字即可编辑（自动保存）；点击图片可替换。复杂改动请用"复制 AI 改写指令"交给 Agent。修改只保存在本机草稿中，导出时会记录修改摘要。'),
+    h('div', { class: 'hint' }, '直接点击文字即可编辑（自动保存）；点击图片可替换；用下方"AI 改写"让 AI 按要求改这一页。每次 AI 改写都会记录（谁、什么要求、改了什么），可撤销；导出时会附上修改摘要。'),
+    aiPanel(s, n),
     $result = h('div'));
+}
+
+const AI_QUICK = ['精简文字，每条不超过 20 字', '改成更偏方法论的表达', '把客户名称换成本 deck 的客户', '补充一个银行业的落地案例要点（数据用 XX 占位）', '改成融合一页的版式', '语气更正式，适合行长汇报'];
+function aiPanel(s, n) {
+  const llm = S.index.llm || {};
+  if (!llm.enabled) return h('div', { class: 'ai-panel' }, h('b', {}, 'AI 改写'), h('div', { class: 'hint' }, '尚未配置 AI 模型。管理员运行：psl config llm --base-url <接口地址> --api-key <Key> --model <模型名>（支持 DeepSeek / 通义 / 豆包 / OpenAI 等 OpenAI 兼容接口），然后刷新页面。'));
+  const ta = h('textarea', { class: 'input', rows: 3, placeholder: `告诉 AI 怎么改第 ${n} 页，例如：把案例换成${D.customer || 'XX银行'}的代发场景，突出 AUM 提升` });
+  const btn = h('button', { class: 'btn primary', onclick: run(async () => {
+    const instruction = ta.value.trim();
+    if (!instruction) return toast('请先写改写要求', true);
+    btn.disabled = true; btn.textContent = 'AI 改写中…（约 10–60 秒）';
+    try {
+      await api('/ai/rewrite', { method: 'POST', json: { draft: D.id, key: s.key, instruction } });
+      D = await api(`/drafts/${D.id}`);
+      renderStatus(); renderPages(); renderStage();
+      toast('AI 已改写，已记录修改；不满意可"撤销"');
+    } finally { btn.disabled = false; btn.textContent = 'AI 改写'; }
+  }) }, 'AI 改写');
+  const edits = s.ai_edits || [];
+  return h('div', { class: 'ai-panel' },
+    h('div', { class: 'bar2' }, h('b', {}, 'AI 改写'), h('span', { class: 'hint' }, `模型：${llm.model}`)),
+    ta,
+    h('div', { class: 'chips' }, AI_QUICK.map((q) => h('span', { class: 'chip tagopt', onclick: () => { ta.value = ta.value ? `${ta.value}；${q}` : q; ta.focus(); } }, q))),
+    h('div', { class: 'bar2' }, btn,
+      edits.length && h('button', { class: 'btn', onclick: run(async () => {
+        if (!confirm(`撤销最近一次 AI 改写「${edits.at(-1).instruction}」？`)) return;
+        await api('/ai/undo', { method: 'POST', json: { draft: D.id, key: s.key } });
+        D = await api(`/drafts/${D.id}`); renderStatus(); renderPages(); renderStage(); toast('已撤销（撤销操作也已记录）');
+      }) }, '撤销上次 AI 改写')),
+    edits.length ? h('div', { class: 'ai-history' }, h('div', { class: 'hint' }, `本页 AI 改写记录（${edits.length}）`),
+      [...edits].reverse().map((e) => h('div', { class: 'ai-rec' },
+        h('div', {}, `🤖 ${fmtTime(e.ts)} ${who(e.user)}：「${e.instruction}」`),
+        e.before_title !== e.after_title ? h('div', { class: 'hint' }, `标题：${e.before_title} → ${e.after_title}`) : null,
+        e.changes?.removed?.length ? h('div', { class: 'hint' }, `删去：${e.changes.removed.slice(0, 3).join(' / ')}${e.changes.removed.length > 3 ? ' …' : ''}`) : null,
+        e.changes?.added?.length ? h('div', { class: 'hint' }, `新增：${e.changes.added.slice(0, 3).join(' / ')}${e.changes.added.length > 3 ? ' …' : ''}`) : null))) : null);
 }
 
 const doExport = run(async (formats) => {
@@ -437,7 +561,7 @@ function pickFromLibrary() {
   const grid = h('div', { class: 'grid' });
   const show = run(async (q) => {
     const ids = q ? await api(`/search?q=${encodeURIComponent(q)}`) : S.index.slides.map((s) => s.id);
-    fill(grid, ids.map((id) => S.byId[id]).filter(Boolean).map((s) => card(s, { onclick: run(async () => {
+    fill(grid, ids.map((id) => S.byId[id]).filter(Boolean).map((s) => card(s, { tagFilter: false, onclick: run(async () => {
       const r = await api(`/drafts/${D.id}/slides`, { method: 'POST', json: { source_id: s.id, pos: insertAt() } });
       D = r.draft; curKey = r.entry.key; m.remove(); renderStatus(); renderPages(); renderStage(); toast('已插入');
     }) })));
@@ -458,20 +582,20 @@ const pickTemplate = run(async () => {
 // ---------- 统计 ----------
 const statsView = run(async () => {
   const st = await api('/stats');
-  const typeLabel = { export: '导出', ingest: '入库', promote: '再入库', tag_edit: '打标' };
+  const typeLabel = { export: '导出', ingest: '入库', promote: '再入库', tag_edit: '打标', ai_edit: 'AI改写', ai_undo: '撤销AI' };
   fill($app, h('div', { class: 'shell' }, topbar([h('div', { class: 'counts' }, `共 ${st.counts.exports} 次导出 · ${st.counts.slides} 页`), h('div', { class: 'spacer' }),
     h('button', { class: 'btn ghost', onclick: () => { location.hash = '#/'; } }, '← 返回素材库')]),
   h('div', { class: 'main' },
     h('h3', {}, '页面使用排行'),
     st.ranking.length ? h('table', { class: 't' },
-      h('tr', {}, ['#', '', '页面', '导出次数', '使用人', '讲给哪些客户', '被临时修改', '最近使用'].map((x) => h('th', {}, x))),
+      h('tr', {}, ['#', '', '页面', '导出次数', '使用人', '讲给哪些客户', '被临时修改', 'AI 改写', '最近使用'].map((x) => h('th', {}, x))),
       st.ranking.map((r, i) => {
         const s = S.byId[r.id];
         return h('tr', { class: 'click', onclick: () => openDetail(r.id) },
           h('td', {}, i + 1), h('td', {}, s ? h('div', { class: 'mini', style: { backgroundImage: `url("${thumbUrl(s)}")` } }) : ''),
           h('td', {}, h('div', {}, r.title), h('div', { class: 'hint' }, `${r.deck_title || ''} · ${r.origin === 'derived' ? '微调' : '原创'}`)),
           h('td', {}, h('b', { style: { color: 'var(--accent)', fontSize: '16px' } }, r.exports)), h('td', {}, r.users.map(who).join('、')),
-          h('td', {}, r.customers.join('、') || '—'), h('td', {}, r.modified ? `${r.modified} 次` : '—'), h('td', {}, fmtTime(r.last)));
+          h('td', {}, r.customers.join('、') || '—'), h('td', {}, r.modified ? `${r.modified} 次` : '—'), h('td', {}, r.ai_edits ? `${r.ai_edits} 次` : '—'), h('td', {}, fmtTime(r.last)));
       })) : h('div', { class: 'empty' }, '还没有导出记录'),
     h('h3', { style: { marginTop: '32px' } }, '客户案例热度'),
     st.customers.length ? h('table', { class: 't' }, h('tr', {}, ['客户', '导出 deck 次数', '累计页数', '售前'].map((x) => h('th', {}, x))),
@@ -482,6 +606,7 @@ const statsView = run(async () => {
       h('td', {}, e.type === 'export' ? `「${e.deck_name}」${e.customer ? `→ ${e.customer}` : ''}，${e.slides.length} 页（改 ${e.slides.filter((x) => x.modified).length}）`
         : e.type === 'ingest' ? `「${e.deck_title}」${e.slide_ids.length} 页`
           : e.type === 'promote' ? `「${e.deck_name}」${e.slides.length} 页${e.note ? `：${e.note}` : ''}`
+            : e.type === 'ai_edit' || e.type === 'ai_undo' ? `「${e.deck_name}」第 ${e.pos} 页：${e.instruction}`
             : `${(e.slide_ids || [e.slide_id]).length} 页`)))))));
 });
 

@@ -1,7 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { ROOT } from './paths.js';
+import { requestUser } from './identity.js';
 
-const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const git = (args) => {
+  const u = requestUser.getStore();
+  const env = u ? { ...process.env, GIT_AUTHOR_NAME: u.name, GIT_AUTHOR_EMAIL: u.email, GIT_COMMITTER_NAME: u.name, GIT_COMMITTER_EMAIL: u.email } : process.env;
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
+};
 const errText = (e) => (e.stderr?.toString() || e.message || '').trim();
 
 export const hasRemote = () => { try { return !!git(['remote', 'get-url', 'origin']); } catch { return false; } };

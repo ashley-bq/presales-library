@@ -9,10 +9,16 @@ const draftDir = (id) => path.join(DRAFTS, id);
 const draftFile = (id) => path.join(draftDir(id), 'draft.json');
 export const draftSlideDir = (id, key) => path.join(draftDir(id), 'slides', key);
 
+/** 草稿归属：只有创建者能看到和修改（服务器模式下多人共用一台服务器时生效） */
+const mine = (d) => !d.owner_slug || d.owner_slug === identity({ required: false }).slug;
+
 export function loadDraft(id) {
-  return readJson(draftFile(id)) || fail(`找不到草稿：${id}`);
+  if (!/^[\w-]+$/.test(id)) fail('草稿 id 不合法');
+  const d = readJson(draftFile(id)) || fail(`找不到草稿：${id}`);
+  if (!mine(d)) fail('这是别人的草稿，无权访问');
+  return d;
 }
-const saveDraft = (d) => { d.updated_at = nowIso(); writeJson(draftFile(d.id), d); return d; };
+export const saveDraft = (d) => { d.updated_at = nowIso(); writeJson(draftFile(d.id), d); return d; };
 
 function addSlide(d, { source_id, layout }, pos) {
   const key = `s${shortId(3)}`;
@@ -36,7 +42,7 @@ function addSlide(d, { source_id, layout }, pos) {
 export function createDraft({ name, customer = '', theme = 'dark', slide_ids = [] }) {
   const me = identity();
   const id = `${today()}-${shortId(3)}`;
-  const d = { id, name: name || '未命名 deck', customer, theme, owner: me.display, created_at: nowIso(), slides: [] };
+  const d = { id, name: name || '未命名 deck', customer, theme, owner: me.display, owner_slug: me.slug, created_at: nowIso(), slides: [] };
   fs.mkdirSync(draftDir(id), { recursive: true });
   for (const sid of slide_ids) addSlide(d, { source_id: sid });
   return saveDraft(d);
@@ -44,7 +50,7 @@ export function createDraft({ name, customer = '', theme = 'dark', slide_ids = [
 
 export function listDrafts() {
   if (!fs.existsSync(DRAFTS)) return [];
-  return fs.readdirSync(DRAFTS).map((id) => readJson(draftFile(id))).filter(Boolean)
+  return fs.readdirSync(DRAFTS).map((id) => readJson(draftFile(id))).filter((d) => d && mine(d))
     .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
     .map((d) => ({ id: d.id, name: d.name, customer: d.customer, pages: d.slides.length, updated_at: d.updated_at, exported_at: d.exported_at || null, promoted_at: d.promoted_at || null }));
 }
@@ -54,7 +60,9 @@ export function slideState(d, s) {
   const dir = draftSlideDir(d.id, s.key);
   const html = fs.readFileSync(path.join(dir, 'slide.html'), 'utf8');
   const title = htmlTitle(html);
-  if (!s.source_id) return { modified: true, is_new: true, title, diff: { new_slide: true, layout: s.layout } };
+  const ai = (s.ai_edits || []).map(({ ts, user, instruction, model }) => ({ ts, user, instruction, model }));
+  const aiPart = ai.length ? { ai_edits: ai } : {};
+  if (!s.source_id) return { modified: true, is_new: true, title, diff: { new_slide: true, layout: s.layout, ...aiPart } };
   const modified = contentHash(dir) !== s.base_hash;
   if (!modified) return { modified: false, title };
   const text = htmlToText(html);
@@ -64,6 +72,7 @@ export function slideState(d, s) {
       title: title !== s.base_title ? [s.base_title, title] : null,
       text_changed: text !== s.base_text,
       image_replaced: assetsHash(dir) !== s.base_assets,
+      ...aiPart,
     },
   };
 }
@@ -92,8 +101,11 @@ export function insertSlide(id, { source_id, layout, pos }) {
   return entry;
 }
 
+const ensureKey = (d, key) => d.slides.some((s) => s.key === key) || fail('草稿中没有这一页');
+
 export function removeSlide(id, key) {
   const d = loadDraft(id);
+  ensureKey(d, key);
   d.slides = d.slides.filter((s) => s.key !== key);
   fs.rmSync(draftSlideDir(id, key), { recursive: true, force: true });
   saveDraft(d);
@@ -101,13 +113,14 @@ export function removeSlide(id, key) {
 
 export function saveSlideHtml(id, key, html) {
   const d = loadDraft(id);
-  if (!d.slides.some((s) => s.key === key)) fail('草稿中没有这一页');
+  ensureKey(d, key);
   if (!/<section\b[^>]*class=["'][^"']*\bslide\b/.test(html)) fail('内容必须是一个 <section class="slide">');
   fs.writeFileSync(path.join(draftSlideDir(id, key), 'slide.html'), html.trim() + '\n');
   saveDraft(d);
 }
 
 export function saveSlideAsset(id, key, filename, buf) {
+  ensureKey(loadDraft(id), key);
   const safe = `${Date.now().toString(36)}-${path.basename(filename).replace(/[^\w.\-]+/g, '_')}`;
   const p = path.join(draftSlideDir(id, key), 'assets', safe);
   fs.mkdirSync(path.dirname(p), { recursive: true });

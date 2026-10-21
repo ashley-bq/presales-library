@@ -1,0 +1,9 @@
+.git
+node_modules
+.cache
+.private
+drafts
+exports
+deploy/data
+deploy/ssh
+.env

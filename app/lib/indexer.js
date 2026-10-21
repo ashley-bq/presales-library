@@ -28,6 +28,11 @@ export function buildIndex({ write = false } = {}) {
       }
     }
   }
+  const aiEdits = {};
+  for (const e of events.filter((e) => e.type === 'ai_edit' || e.type === 'ai_undo')) {
+    if (!e.source_id) continue;
+    (aiEdits[e.source_id] ||= []).push({ ts: e.ts, user: e.user, type: e.type, customer: e.customer, deck_name: e.deck_name, instruction: e.instruction, model: e.model, before_title: e.before_title, after_title: e.after_title, changes: e.changes });
+  }
   for (const e of events.filter((e) => e.type === 'promote')) {
     for (const p of e.slides || []) {
       const list = mods[p.parent_id];
@@ -44,7 +49,7 @@ export function buildIndex({ write = false } = {}) {
     return {
       ...s,
       deck_title: s.deck_title || deckTitle[s.source?.deck_id] || '',
-      usage: { exports: u?.exports || 0, users: u ? [...u.users] : [], customers: u ? [...u.customers] : [], last: u?.last || null, modified: u?.modified || 0 },
+      usage: { exports: u?.exports || 0, users: u ? [...u.users] : [], customers: u ? [...u.customers] : [], last: u?.last || null, modified: u?.modified || 0, ai_edits: (aiEdits[s.id] || []).filter((x) => x.type === 'ai_edit').length },
       children: children[s.id] || [],
     };
   }).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '') || a.id.localeCompare(b.id));
@@ -63,7 +68,7 @@ export function buildIndex({ write = false } = {}) {
   const index = {
     generated_at: new Date().toISOString(), taxonomy,
     counts: { slides: items.length, decks: decks.length, exports: events.filter((e) => e.type === 'export').length, untagged: items.filter((s) => !s.tagged).length },
-    slides: items, decks, facets, mods,
+    slides: items, decks, facets, mods, aiEdits,
     customers: Object.values(customers).map((c) => ({ ...c, users: [...c.users] })).sort((a, b) => b.exports - a.exports),
     recent: events.slice(-50).reverse(),
     byId: undefined,
@@ -117,7 +122,7 @@ export function history(index, id) {
   while (root.parent_id && index.byId[root.parent_id]) root = index.byId[root.parent_id];
   const node = (x) => ({
     id: x.id, title: x.title, origin: x.origin, author: x.author, created_at: x.created_at, customer: x.customer,
-    usage: x.usage, modifications: index.mods[x.id] || [], children: x.children.map((c) => index.byId[c]).filter(Boolean).map(node),
+    usage: x.usage, modifications: index.mods[x.id] || [], ai_edits: index.aiEdits[x.id] || [], modification: x.modification || null, children: x.children.map((c) => index.byId[c]).filter(Boolean).map(node),
   });
   const ancestors = [];
   for (let p = s; p.parent_id && index.byId[p.parent_id]; p = index.byId[p.parent_id]) ancestors.unshift(p.parent_id);
@@ -129,5 +134,5 @@ export function usageRanking(index, { limit = 50, filters = {}, q = '' } = {}) {
     .filter((s) => s.usage.exports > 0)
     .sort((a, b) => b.usage.exports - a.usage.exports || b.usage.users.length - a.usage.users.length)
     .slice(0, limit)
-    .map((s) => ({ id: s.id, title: s.title, deck_title: s.deck_title, origin: s.origin, exports: s.usage.exports, users: s.usage.users, customers: s.usage.customers, modified: s.usage.modified, last: s.usage.last }));
+    .map((s) => ({ id: s.id, title: s.title, deck_title: s.deck_title, origin: s.origin, exports: s.usage.exports, users: s.usage.users, customers: s.usage.customers, modified: s.usage.modified, ai_edits: s.usage.ai_edits, last: s.usage.last }));
 }
