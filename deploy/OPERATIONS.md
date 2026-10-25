@@ -49,6 +49,19 @@ sudo docker exec presales-app-1 node /app/bin/psl.js sync
    `echo "<公钥>" >> ~/.ssh/authorized_keys`
 3. 之后新电脑即可 `ssh ubuntu@49.232.207.25`。
 
+## 换个 Agent/电脑时的开场白（复制即用）
+
+```
+git clone git@github.com:ashley-bq/presales-library.git
+进入仓库后先读 AGENTS.md 和 .devin/skills/presales-library/SKILL.md（素材库操作必须按 skill 规则），
+再读 deploy/OPERATIONS.md 了解云端服务器现状；然后 npm install && node bin/psl.js doctor 自检。
+任务：<写当天要做的事>
+```
+
+- 新电脑访问私有库：新机器生成 SSH key 加到 GitHub，或用 HTTPS + PAT。
+- 本地 AI 打标/改写需配置 Key（不在仓库）：`node bin/psl.js config llm --base-url <url> --api-key <key> --model <model>`；
+  不配置也能用——网页端 AI 走服务器上的 Key。
+
 ## 待办
 
 - [ ] 配域名 → Caddy 自动签发 HTTPS（`.env` 里填 `PSL_DOMAIN=` 后 `docker compose up -d`）
