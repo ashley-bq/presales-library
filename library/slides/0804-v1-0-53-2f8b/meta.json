@@ -3,14 +3,24 @@
   "title": "银行做的：策略经验落地产品，赋能客群经营岗",
   "text": "银行做的：策略经验落地产品，赋能客群经营岗\n8/5/26\n53\n活动策略推荐工具",
   "tags": {
-    "条线": [],
-    "场景专题": [],
-    "内容类型": [],
-    "目标客户": [],
-    "汇报类型": []
+    "条线": [
+      "零售"
+    ],
+    "场景专题": [
+      "精准营销"
+    ],
+    "内容类型": [
+      "产品介绍"
+    ],
+    "目标客户": [
+      "农商行"
+    ],
+    "汇报类型": [
+      "交流"
+    ]
   },
-  "customer": "",
-  "scope": "universal",
+  "customer": "常熟农商",
+  "scope": "customer-specific",
   "origin": "original",
   "parent_id": null,
   "root_id": "0804-v1-0-53-2f8b",
@@ -22,9 +32,10 @@
     "image": true
   },
   "theme": "dark",
-  "tagged": false,
+  "tagged": true,
   "author": "Ashley <ashleyxu0926@gmail.com>",
   "created_at": "2026-10-25T18:22:19.726Z",
   "content_hash": "cf762f006ee6a35be2a948f44bef73a8d476d92b",
-  "deck_title": "常熟农商交流材料_综合经营驱动客户增长_0804_v1.0"
+  "deck_title": "常熟农商交流材料_综合经营驱动客户增长_0804_v1.0",
+  "tag_source": "ai"
 }
