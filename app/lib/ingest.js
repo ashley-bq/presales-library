@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import JSZip from 'jszip';
-import { createSlide, newSlideId, saveDeck, slideDir, getSlide, saveMeta } from './library.js';
+import { createSlide, newSlideId, saveDeck, slideDir, getSlide, saveMeta, listDecks } from './library.js';
 import { renderSlides, pdfToJpegs, pdfPages } from './render.js';
 import { appendEvent } from './events.js';
 import { commitAndPush, pull } from './git.js';
@@ -11,12 +12,22 @@ import { asciiSlug, shortId, today, nowIso, decodeEntities, escapeHtml, fail, co
 import { rel, SLIDES, DECKS, CACHE } from './paths.js';
 
 const SECTION_RE = /<section\b[^>]*class\s*=\s*["'][^"']*\bslide\b[^"']*["'][^>]*>[\s\S]*?<\/section>/gi;
+const run = promisify(execFile);
 
-export async function renderThumbs(ids) {
+/** 进度/暂停/取消钩子：网页上传时由服务端任务传入；命令行用默认空实现 */
+export const NOJOB = { step() {}, async checkpoint() {}, signal: undefined };
+
+export async function renderThumbs(ids, job = NOJOB) {
   await renderSlides(ids.map((id) => {
     const dir = slideDir(id);
     return { html: fs.readFileSync(path.join(dir, 'slide.html'), 'utf8'), dir, theme: getSlide(id).theme, thumb: path.join(dir, 'thumb.jpg') };
-  }));
+  }), { onEach: async (i, n) => { job.step('生成缩略图', i, n); await job.checkpoint(); } });
+}
+
+/** 入库中途取消/失败：删掉本次新建的页面和 deck，不留半成品 */
+function rollback(ids, deckId) {
+  for (const id of ids) fs.rmSync(slideDir(id), { recursive: true, force: true });
+  if (deckId) fs.rmSync(path.join(DECKS, `${deckId}.json`), { force: true });
 }
 
 function deckRecord(opts, slideIds, format, sourceFile) {
@@ -31,8 +42,12 @@ function deckRecord(opts, slideIds, format, sourceFile) {
   return deck;
 }
 
-async function finish(deck, slides, format) {
-  await renderThumbs(slides.map((s) => s.id));
+async function finish(deck, slides, format, job = NOJOB) {
+  try {
+    await renderThumbs(slides.map((s) => s.id), job);
+    await job.checkpoint();
+  } catch (e) { rollback(slides.map((s) => s.id), deck.id); throw e; }
+  job.step('提交到共享仓库');
   const { file } = appendEvent('ingest', { deck_id: deck.id, deck_title: deck.title, format, slide_ids: slides.map((s) => s.id) });
   const git = commitAndPush([rel(SLIDES), rel(DECKS), rel(file)], `[入库] ${deck.title}（${slides.length} 页）by ${identity().name}`);
   return {
@@ -71,7 +86,7 @@ export async function ingestHtml(file, opts = {}) {
   });
   const deck = deckRecord({ ...opts, title }, slides.map((s) => s.id), 'html', file);
   for (const s of slides) { s.source.deck_id = deck.id; s.deck_title = title; saveMeta(s); }
-  return finish(deck, slides, 'html');
+  return finish(deck, slides, 'html', opts.job);
 }
 
 /* ---------------- PPTX ---------------- */
@@ -116,10 +131,11 @@ export function pptxRenderer() {
   return soffice ? `libreoffice:${soffice}` : null;
 }
 
-/** PPTX → PDF（PowerPoint 优先，其次 LibreOffice） */
-function pptxToPdf(pptx, workDir) {
+/** PPTX → PDF（PowerPoint 优先，其次 LibreOffice）。异步执行，转换期间服务仍可响应进度查询；signal 用于取消 */
+async function pptxToPdf(pptx, workDir, signal) {
   const kind = pptxRenderer();
   const pdf = path.join(workDir, 'deck.pdf');
+  const cancelled = () => signal?.aborted && fail('已取消');
   if (kind === 'powerpoint-mac') {
     // PowerPoint 处于沙盒中：固定使用 .cache/powerpoint 目录，首次会弹"授予访问权限"，授权一次后永久有效
     const box = path.join(CACHE, 'powerpoint');
@@ -138,10 +154,11 @@ function pptxToPdf(pptx, workDir) {
       end timeout`;
     try {
       console.error('正在用 PowerPoint 渲染整页图（首次使用请在 PowerPoint 弹窗中点击"授予访问权限"）…');
-      execFileSync('osascript', ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 620000 });
+      await run('osascript', ['-e', script], { timeout: 620000, signal });
       fs.copyFileSync(outFile, pdf);
       return pdf;
     } catch (e) {
+      cancelled();
       const msg = (e.stderr || e.message).toString().trim();
       console.error('PowerPoint 转换失败，尝试 LibreOffice：', msg);
       if (msg.includes('-9074')) console.error('提示：PowerPoint 没有访问权限。请切换到 PowerPoint，在弹出的"授予访问权限"窗口中点击允许，然后重新导入。');
@@ -151,82 +168,151 @@ function pptxToPdf(pptx, workDir) {
     const ps = `$ErrorActionPreference='Stop'; $app=New-Object -ComObject PowerPoint.Application;
       $p=$app.Presentations.Open('${pptx.replace(/'/g, "''")}', $true, $false, $false);
       $p.SaveAs('${pdf.replace(/'/g, "''")}', 32); $p.Close(); $app.Quit()`;
-    try { execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 }); return pdf; } catch (e) {
+    try { await run('powershell', ['-NoProfile', '-Command', ps], { timeout: 180000, signal }); return pdf; } catch (e) {
+      cancelled();
       console.error('PowerPoint COM 转换失败，尝试 LibreOffice：', (e.stderr || e.message).toString().trim());
     }
   }
   const soffice = kind?.startsWith('libreoffice:') ? kind.slice(12) : (which('soffice') || which('libreoffice'));
   if (soffice) {
-    execFileSync(soffice, ['--headless', '--convert-to', 'pdf', '--outdir', workDir, pptx], { stdio: 'ignore', timeout: 300000 });
+    try { await run(soffice, ['--headless', '--convert-to', 'pdf', '--outdir', workDir, pptx], { timeout: 600000, signal }); } catch (e) { cancelled(); throw e; }
     const out = path.join(workDir, path.basename(pptx).replace(/\.pptx$/i, '.pdf'));
     if (fs.existsSync(out)) { fs.renameSync(out, pdf); return pdf; }
   }
   return null;
 }
 
-export async function importPptx(file, opts = {}) {
-  pull();
+/**
+ * 解析 PPTX 并渲染整页图：{pages:[{title,text,notes,hidden,image?}], images, renderer, work}
+ * 隐藏页会被 PowerPoint/LibreOffice 导出 PDF 时跳过，导致页图缺失甚至错位，所以渲染前先取消隐藏。
+ */
+async function renderPptx(file, job) {
+  job.step('解析 PPTX');
   const zip = await JSZip.loadAsync(fs.readFileSync(file));
   const { order, cy } = await slideOrder(zip);
   const pages = [];
   for (const p of order) {
     const xml = await zip.file(p).async('string');
+    const hidden = /<p:sld\b[^>]*\sshow="(0|false)"/.test(xml);
     const parsed = parseSlideXml(xml, cy);
-    zip.file(p, parsed.stripped);
+    zip.file(p, parsed.stripped.replace(/(<p:sld\b[^>]*?)\s+show="(?:0|false)"/, '$1'));
     const notesRel = (await zip.file(p.replace('slides/', 'slides/_rels/') + '.rels')?.async('string')) || '';
     const notesTarget = (notesRel.match(/Target="\.\.\/notesSlides\/([^"]+)"/) || [])[1];
     const notes = notesTarget ? paragraphs(await zip.file(`ppt/notesSlides/${notesTarget}`).async('string')).filter((t) => !/^\d+$/.test(t)).join('\n') : '';
-    pages.push({ ...parsed, notes });
+    pages.push({ ...parsed, notes, hidden });
   }
   const work = path.join(CACHE, `pptx-${shortId(4)}`);
   fs.mkdirSync(work, { recursive: true });
   const strippedPptx = path.join(work, 'stripped.pptx');
   fs.writeFileSync(strippedPptx, await zip.generateAsync({ type: 'nodebuffer' }));
+  await job.checkpoint();
   let images = [];
+  const renderer = pptxRenderer();
   try {
-    const pdf = pptxToPdf(strippedPptx, work);
-    if (pdf) images = await pdfToJpegs(pdf, path.join(work, 'img'));
-  } catch (e) { console.error('渲染整页图失败：', e.message); }
+    job.step(`转换整页图（${renderer?.startsWith('powerpoint') ? 'PowerPoint' : 'LibreOffice'}，${pages.length} 页，大文件需要几分钟）`);
+    const pdf = await pptxToPdf(strippedPptx, work, job.signal);
+    await job.checkpoint();
+    if (pdf) images = await pdfToJpegs(pdf, path.join(work, 'img'), { onEach: async (i, n) => { job.step('拆分页面图', i, n); await job.checkpoint(); } });
+  } catch (e) {
+    if (job.signal?.aborted) { fs.rmSync(work, { recursive: true, force: true }); throw e; }
+    console.error('渲染整页图失败：', e.message);
+  }
+  if (images.length && images.length !== pages.length) {
+    // 页数对不上时按序号对齐会张冠李戴，宁可不放图
+    console.error(`整页图数量（${images.length}）与幻灯片数量（${pages.length}）不一致，已放弃页图以免错位`);
+    images = [];
+  }
+  pages.forEach((pg, i) => { pg.image = images[i]; });
+  return { pages, images, renderer, work };
+}
 
+const noImageNote = (renderer) => renderer
+  ? '（这一页的整页图没有生成成功：可在"上传素材"里重新上传同名 PPTX，选择"补全缺图页"）'
+  : '（未能渲染原页图片：服务器缺少 PowerPoint / LibreOffice）';
+
+export async function importPptx(file, opts = {}) {
+  pull();
+  const job = opts.job || NOJOB;
+  const { pages, images, renderer, work } = await renderPptx(file, job);
   try {
-    const res = await imageDeck(pages.map((pg, i) => ({ ...pg, image: images[i] })), opts, 'pptx', file);
-    return { ...res, rendered_images: images.length, renderer: pptxRenderer() };
+    const res = await imageDeck(pages, { ...opts, noImage: noImageNote(renderer) }, 'pptx', file);
+    return { ...res, rendered_images: images.length, pages: pages.length, hidden_pages: pages.filter((p) => p.hidden).length, renderer };
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 
-/** 通用："HTML 主标题 + 整页图"的 deck。pages: [{title, text, notes?, image?}] */
+/** 已入库的 PPTX deck 有缺图页时：重新渲染同一份 PPTX，只给缺图页补上整页图（页面 id、标签、血缘都不变） */
+export async function repairPptxImages(deckId, file, opts = {}) {
+  pull();
+  const job = opts.job || NOJOB;
+  const deck = listDecks().find((d) => d.id === deckId) || fail(`没有这个 deck：${deckId}`);
+  const missing = deck.slides.map((id, i) => ({ id, i, meta: getSlide(id) })).filter((x) => x.meta && !x.meta.source?.image);
+  if (!missing.length) return { deck_id: deckId, repaired: [], note: '这个 deck 没有缺图页' };
+  const { pages, images, work } = await renderPptx(file, job);
+  try {
+    if (pages.length !== deck.slides.length) fail(`上传的 PPTX 有 ${pages.length} 页，库中「${deck.title}」有 ${deck.slides.length} 页，不是同一份文件，不能补图`);
+    if (!images.length) fail('整页图仍然没有渲染出来，请检查 PowerPoint / LibreOffice');
+    const repaired = [];
+    for (const { id, i, meta } of missing) {
+      const img = pages[i].image;
+      if (!img) continue;
+      const dir = slideDir(id);
+      const ext = path.extname(img).toLowerCase() || '.jpg';
+      fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+      fs.copyFileSync(img, path.join(dir, `assets/page${ext}`));
+      const htmlFile = path.join(dir, 'slide.html');
+      fs.writeFileSync(htmlFile, fs.readFileSync(htmlFile, 'utf8').replace(/<div class="page-image">[\s\S]*?<\/div>/, `<div class="page-image"><img src="assets/page${ext}" alt="" data-replaceable></div>`));
+      meta.source = { ...meta.source, image: true, ...(pages[i].hidden ? { hidden: true } : {}) };
+      meta.content_hash = contentHash(dir);
+      saveMeta(meta);
+      repaired.push({ id, page: i + 1, title: meta.title });
+    }
+    await renderThumbs(repaired.map((r) => r.id), job);
+    job.step('提交到共享仓库');
+    const git = commitAndPush([rel(SLIDES)], `[补图] ${deck.title}：补全 ${repaired.length} 页整页图 by ${identity().name}`);
+    return { deck_id: deckId, repaired, git };
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+/** 通用："HTML 主标题 + 整页图"的 deck。pages: [{title, text, notes?, image?, hidden?}] */
 async function imageDeck(pages, opts, format, file) {
+  const job = opts.job || NOJOB;
   const fileName = opts.sourceName || path.basename(file);
   const title = opts.title || fileName.replace(/\.[^.]+$/, '');
   const prefix = asciiSlug(opts.slug || fileName.replace(/\.[^.]+$/, ''), format);
   const theme = opts.theme || 'light';
-  const slides = pages.map((pg, i) => {
-    const t = pg.title || `${title} 第 ${i + 1} 页`;
-    const ext = pg.image ? path.extname(pg.image).toLowerCase() || '.jpg' : '';
-    const html = `<section class="slide layout-image-page" data-layout="image-page">
+  const slides = [];
+  try {
+    for (const [i, pg] of pages.entries()) {
+      job.step('写入页面', i, pages.length);
+      const t = pg.title || `${title} 第 ${i + 1} 页`;
+      const ext = pg.image ? path.extname(pg.image).toLowerCase() || '.jpg' : '';
+      const html = `<section class="slide layout-image-page" data-layout="image-page">
   <h2 data-editable>${escapeHtml(t)}</h2>
-  <div class="page-image">${pg.image ? `<img src="assets/page${ext}" alt="" data-replaceable>` : '<p class="muted">（未能渲染原页图片：请安装 PowerPoint 或 LibreOffice 后重新导入）</p>'}</div>
+  <div class="page-image">${pg.image ? `<img src="assets/page${ext}" alt="" data-replaceable>` : `<p class="muted">${escapeHtml(opts.noImage || '（这一页没有整页图）')}</p>`}</div>
 </section>`;
-    return createSlide({
-      id: newSlideId(prefix, i + 1), html, files: pg.image ? [{ name: `assets/page${ext}`, src: pg.image }] : [],
-      meta: {
-        title: t, text: [pg.text || t, pg.notes && `备注：${pg.notes}`].filter(Boolean).join('\n'), theme,
-        customer: opts.customer || '', scope: opts.customer ? 'customer-specific' : 'universal',
-        source: { format, deck_id: null, page: i + 1, file: pg.file || fileName, image: !!pg.image },
-      },
-    });
-  });
+      slides.push(createSlide({
+        id: newSlideId(prefix, i + 1), html, files: pg.image ? [{ name: `assets/page${ext}`, src: pg.image }] : [],
+        meta: {
+          title: t, text: [pg.text || t, pg.notes && `备注：${pg.notes}`].filter(Boolean).join('\n'), theme,
+          customer: opts.customer || '', scope: opts.customer ? 'customer-specific' : 'universal',
+          source: { format, deck_id: null, page: i + 1, file: pg.file || fileName, image: !!pg.image, ...(pg.hidden ? { hidden: true } : {}) },
+        },
+      }));
+    }
+    await job.checkpoint();
+  } catch (e) { rollback(slides.map((s) => s.id)); throw e; }
   const deck = deckRecord({ ...opts, title }, slides.map((s) => s.id), format, fileName);
   for (const s of slides) { s.source.deck_id = deck.id; s.deck_title = title; s.content_hash = contentHash(slideDir(s.id)); saveMeta(s); }
-  return finish(deck, slides, format);
+  return finish(deck, slides, format, job);
 }
 
 /** PDF 入库：每页整页图 + 提取的标题与文字 */
 export async function importPdf(file, opts = {}) {
   pull();
+  const job = opts.job || NOJOB;
   const work = path.join(CACHE, `pdf-${shortId(4)}`);
   try {
-    const pages = await pdfPages(file, work);
+    const pages = await pdfPages(file, work, { onEach: async (i, n) => { job.step('渲染 PDF 页面', i, n); await job.checkpoint(); } });
     if (!pages.length) fail('PDF 没有页面');
     return await imageDeck(pages.map((p) => ({ title: p.title, text: p.text, image: p.file })), opts, 'pdf', file);
   } finally { fs.rmSync(work, { recursive: true, force: true }); }

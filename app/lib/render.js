@@ -41,14 +41,15 @@ const themeFileHref = () => fileUrl(path.join(THEMES, 'theme.css'));
  * 渲染若干页。items: [{html, dir, theme, png?, jpg?, thumb?}]
  * dir 为该页资源目录（assets/ 相对它解析）
  */
-export async function renderSlides(items) {
+export async function renderSlides(items, { onEach } = {}) {
   const b = await browser();
   const full = await b.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   const small = await b.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 / 3 });
   fs.mkdirSync(CACHE, { recursive: true });
   const tmp = path.join(CACHE, `render-${shortId(4)}.html`);
   try {
-    for (const it of items) {
+    for (const [i, it] of items.entries()) {
+      await onEach?.(i, items.length);
       fs.writeFileSync(tmp, slideDocument({ html: it.html, base: fileUrl(it.dir + path.sep), theme: it.theme, themeHref: themeFileHref() }));
       const shoot = async (page, opts) => {
         await page.goto(fileUrl(tmp), { waitUntil: 'load' });
@@ -67,12 +68,12 @@ export async function renderSlides(items) {
 }
 
 /** 用 pdf.js 把 PDF 每页渲染为 JPEG（宽 1920），返回文件路径列表 */
-export async function pdfToJpegs(pdfPath, outDir, width = W) {
-  return (await pdfPages(pdfPath, outDir, width)).map((p) => p.file);
+export async function pdfToJpegs(pdfPath, outDir, opts = {}) {
+  return (await pdfPages(pdfPath, outDir, opts)).map((p) => p.file);
 }
 
-/** PDF 每页：{file, title, text}；标题取页面上半部分字号最大的一行 */
-export async function pdfPages(pdfPath, outDir, width = W) {
+/** PDF 每页：{file, title, text}；标题取页面上半部分字号最大的一行。onEach(i, total) 在每页渲染前调用（可 await 暂停） */
+export async function pdfPages(pdfPath, outDir, { width = W, onEach } = {}) {
   const b = await browser();
   const page = await b.newPage();
   fs.mkdirSync(outDir, { recursive: true });
@@ -95,6 +96,7 @@ window.pdfjsLib = pdfjsLib;
     }, data);
     const out = [];
     for (let i = 1; i <= count; i++) {
+      await onEach?.(i - 1, count);
       const r = await page.evaluate(async ({ i, width }) => {
         const p = await window._pdf.getPage(i);
         const vp0 = p.getViewport({ scale: 1 });

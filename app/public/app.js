@@ -254,43 +254,146 @@ function renderCart() {
 
 // ---------- 上传素材 ----------
 const fmtSize = (n) => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+/** 带进度的上传（fetch 拿不到上传进度）；返回 { promise, abort } */
+function uploadFile(f, onProgress) {
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise((resolve, reject) => {
+    xhr.open('POST', `/api/upload?name=${encodeURIComponent(f.name)}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let j = {}; try { j = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401 && j.login) { location.href = '/login.html'; return reject(new Error('请先登录')); }
+      xhr.status < 300 ? resolve(j) : reject(new Error(j.error || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传失败'));
+    xhr.onabort = () => reject(new Error('已取消上传'));
+    xhr.send(f);
+  });
+  return { promise, abort: () => xhr.abort() };
+}
+/** 库里同名 PPTX 的缺图页：{ deck_id, deck_title, missing } */
+function missingImages(name) {
+  const by = {};
+  for (const s of S.index.slides) {
+    if (s.source?.format !== 'pptx' || s.source.file !== name || s.source.image) continue;
+    (by[s.source.deck_id] ||= { deck_id: s.source.deck_id, deck_title: s.deck_title, missing: 0 }).missing++;
+  }
+  return Object.values(by)[0] || null;
+}
+
 function openUpload() {
   const files = [];
+  const repair = {};
   const list = h('div', { class: 'up-list' });
   const status = h('div', { class: 'hint' });
+  const bar = h('i');
+  const progress = h('div', { class: 'progress', style: { display: 'none' } }, bar);
   const llm = S.index.llm?.enabled;
   const form = { title: '', customer: '', theme: 'light', report_type: '', auto_tag: llm };
-  const renderList = () => fill(list, files.length ? files.map((f, i) => h('div', { class: 'up-item' },
-    h('span', {}, /\.pptx$/i.test(f.name) ? 'PPTX' : /\.pdf$/i.test(f.name) ? 'PDF' : /\.html?$/i.test(f.name) ? 'HTML' : '图片'),
-    h('b', {}, f.name), h('span', { class: 'hint' }, fmtSize(f.size)),
-    h('button', { class: 'x', onclick: () => { files.splice(i, 1); renderList(); } }, '×'))) : h('div', { class: 'hint' }, '还没有选择文件'));
-  const add = (fl) => { for (const f of fl) if (/\.(pptx|pdf|html?|png|jpe?g|webp|gif|svg)$/i.test(f.name)) files.push(f); else toast(`不支持的文件：${f.name}`, true); renderList(); };
+  let busy = false, currentUpload = null, jobId = null, jobState = null;
+  const renderList = () => fill(list, files.length ? files.map((f, i) => {
+    const miss = /\.pptx$/i.test(f.name) && missingImages(f.name);
+    if (miss && !(f.name in repair)) repair[f.name] = miss.deck_id;
+    return h('div', { class: 'up-item-wrap' },
+      h('div', { class: 'up-item' },
+        h('span', {}, /\.pptx$/i.test(f.name) ? 'PPTX' : /\.pdf$/i.test(f.name) ? 'PDF' : /\.html?$/i.test(f.name) ? 'HTML' : '图片'),
+        h('b', {}, f.name), h('span', { class: 'hint' }, f._pct != null ? `${Math.round(f._pct * 100)}%` : fmtSize(f.size)),
+        h('button', { class: 'x', disabled: busy, onclick: () => { files.splice(i, 1); delete repair[f.name]; renderList(); } }, '×')),
+      miss && h('label', { class: 'hint up-repair' },
+        h('input', { type: 'checkbox', checked: !!repair[f.name], disabled: busy, onchange: (e) => { repair[f.name] = e.target.checked ? miss.deck_id : null; } }),
+        `库中「${miss.deck_title}」有 ${miss.missing} 页缺整页图：只补全这些页（不新建 deck）`));
+  }) : h('div', { class: 'hint' }, '还没有选择文件'));
+  const add = (fl) => { if (busy) return; for (const f of fl) if (/\.(pptx|pdf|html?|png|jpe?g|webp|gif|svg)$/i.test(f.name)) files.push(f); else toast(`不支持的文件：${f.name}`, true); renderList(); };
   const picker = h('input', { type: 'file', multiple: true, accept: '.pptx,.pdf,.html,.htm,image/*', style: { display: 'none' }, onchange: (e) => add(e.target.files) });
-  const drop = h('div', { class: 'drop', onclick: () => picker.click(),
+  const drop = h('div', { class: 'drop', onclick: () => !busy && picker.click(),
     ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'),
     ondrop: (e) => { e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); } },
   h('b', {}, '拖拽文件到这里，或点击选择'), h('div', { class: 'hint' }, 'PPTX（主标题转文字 + 整页图）· PDF（每页整页图 + 文字）· 图片（每张一页）；多张图片合成一个 deck'));
   const field = (k, ph) => h('input', { class: 'input', placeholder: ph, oninput: (e) => { form[k] = e.target.value; } });
+
+  const setProgress = (text, frac) => {
+    progress.style.display = '';
+    progress.classList.toggle('indet', frac == null);
+    bar.style.width = frac == null ? '' : `${Math.max(2, Math.min(100, frac * 100)).toFixed(1)}%`;
+    fill(status, text);
+  };
+  const pauseBtn = h('button', { class: 'btn ghost', style: { display: 'none' }, onclick: run(async () => {
+    const j = await api(`/jobs/${jobId}/${jobState === 'paused' || pauseBtn.dataset.paused ? 'resume' : 'pause'}`, { method: 'POST' });
+    pauseBtn.dataset.paused = j.paused ? '1' : '';
+    pauseBtn.textContent = j.paused ? '继续' : '暂停';
+  }) }, '暂停');
+  const cancelBtn = h('button', { class: 'btn ghost', style: { display: 'none' }, onclick: run(async () => {
+    if (currentUpload) return currentUpload.abort();
+    if (jobId && confirm('确定取消入库？\n· 正在入库的这个文件会整体撤销，不留半成品\n· 已完成入库的文件保留\n· AI 打标阶段取消时，已打好的标签保留')) {
+      await api(`/jobs/${jobId}/cancel`, { method: 'POST' });
+      fill(status, '正在取消…（当前步骤结束后停止）');
+    }
+  }) }, '取消');
+
+  const finish = async (r) => {
+    await loadIndex();
+    const ids = r.decks.flatMap((d) => d.slides.map((s) => s.id));
+    if (document.body.contains(m)) m.remove();
+    S.filters = {}; S.q = '';
+    route();
+    const parts = [];
+    if (ids.length) parts.push(`已入库 ${ids.length} 页`);
+    for (const x of r.repaired || []) parts.push(x.note || `「${x.file}」补全 ${x.count} 页整页图`);
+    if (r.auto_tagged) parts.push(`AI 已打标 ${r.auto_tagged} 页（卡片上标"AI打标"，点开详情确认）`);
+    else if (ids.length && !r.tag_error) parts.push('请打开详情手动打标');
+    if (r.tag_error) parts.push(`AI 打标：${r.tag_error}`);
+    if (r.cancelled) parts.unshift('已取消');
+    toast(parts.join('；') || '已取消，没有入库任何页面', !!r.tag_error || r.cancelled, 9000);
+    const hidden = r.decks.reduce((n, d) => n + (d.hidden_pages || 0), 0);
+    if (hidden) toast(`其中 ${hidden} 页在原 PPT 中是隐藏页，也已一并入库`, false, 8000);
+    if (r.decks.some((d) => d.pages && d.rendered_images === 0)) toast('有 PPTX 未能渲染整页图：Mac 请在 PowerPoint 弹窗中"授予访问权限"后重新上传（会提示"补全缺图页"）', true, 12000);
+  };
+
+  const poll = async () => {
+    for (;;) {
+      let j;
+      try { j = await api(`/jobs/${jobId}`); } catch (e) { toast(`入库进度查询失败：${e.message}`, true); return; }
+      jobState = j.state;
+      pauseBtn.textContent = j.paused ? '继续' : '暂停';
+      pauseBtn.dataset.paused = j.paused ? '1' : '';
+      if (['done', 'cancelled'].includes(j.state) && j.result) return finish(j.result);
+      if (j.state === 'cancelled') { if (document.body.contains(m)) m.remove(); return toast('已取消，没有入库任何页面', true); }
+      if (j.state === 'error') { busy = false; go.disabled = false; pauseBtn.style.display = cancelBtn.style.display = 'none'; renderList(); return toast(`入库失败：${j.error}`, true, 10000); }
+      const frac = j.total ? j.done / j.total : null;
+      setProgress(`${j.state === 'paused' ? '⏸ 已暂停 · ' : j.paused ? '暂停中（当前步骤完成后暂停）· ' : ''}${j.stage}${j.total ? `  ${j.done}/${j.total}` : ''}`, frac);
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  };
+
   const go = h('button', { class: 'btn primary', onclick: run(async () => {
     if (!files.length) return toast('请先选择文件', true);
-    go.disabled = true;
+    busy = true; go.disabled = true; renderList();
+    cancelBtn.style.display = '';
     try {
+      const total = files.reduce((n, f) => n + f.size, 0);
+      let sent = 0;
       const items = [];
       for (const [i, f] of files.entries()) {
-        fill(status, `上传中 ${i + 1}/${files.length}：${f.name}`);
-        items.push(await api(`/upload?name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f, headers: { 'Content-Type': 'application/octet-stream' } }));
+        currentUpload = uploadFile(f, (p) => {
+          f._pct = p; renderList();
+          setProgress(`上传中 ${i + 1}/${files.length}：${f.name}（${fmtSize(sent + f.size * p)} / ${fmtSize(total)}）`, (sent + f.size * p) / total);
+        });
+        items.push(await currentUpload.promise);
+        sent += f.size;
       }
-      fill(status, `入库中…（PPTX/PDF 需要逐页渲染${form.auto_tag ? '，随后 AI 自动打标' : ''}，请稍候）`);
-      const r = await api('/upload/ingest', { method: 'POST', json: { items: items.map((x) => ({ token: x.token, name: x.name })), ...form } });
-      await loadIndex();
-      const ids = r.decks.flatMap((d) => d.slides.map((s) => s.id));
-      m.remove();
-      S.filters = {}; S.q = '';
-      route();
-      const msg = `已入库 ${ids.length} 页` + (r.auto_tagged ? `，AI 已打标 ${r.auto_tagged} 页（卡片上标"AI打标"，点开详情确认）` : r.tag_error ? `；AI 打标失败：${r.tag_error}` : '；请打开详情手动打标');
-      toast(msg, !!r.tag_error, 8000);
-      if (r.decks.some((d) => d.rendered_images === 0)) toast('有 PPTX 未能渲染整页图：Mac 请在 PowerPoint 弹窗中"授予访问权限"后重新上传', true, 10000);
-    } finally { go.disabled = false; }
+      currentUpload = null;
+      setProgress('已上传，开始入库…', null);
+      const r = await api('/upload/ingest', { method: 'POST', json: { items: items.map((x) => ({ token: x.token, name: x.name })), repair: Object.fromEntries(Object.entries(repair).filter(([, v]) => v)), ...form } });
+      jobId = r.job.id;
+      pauseBtn.style.display = '';
+      poll();
+    } catch (e) {
+      currentUpload = null; busy = false; go.disabled = false; cancelBtn.style.display = 'none';
+      for (const f of files) delete f._pct;
+      progress.style.display = 'none'; fill(status, ''); renderList();
+      throw e;
+    }
   }) }, '开始入库');
   const m = modal('上传素材', h('div', { class: 'upload' },
     drop, picker, list,
@@ -301,7 +404,9 @@ function openUpload() {
     h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: form.auto_tag, disabled: !llm, onchange: (e) => { form.auto_tag = e.target.checked; } }),
       llm ? `入库后用 AI 自动打标（${S.index.llm.model}）` : 'AI 自动打标不可用：管理员需先配置模型（psl config llm …）'),
-    h('div', { class: 'bar2' }, status, h('div', { class: 'spacer' }), go)));
+    progress,
+    h('div', { class: 'bar2' }, status, h('div', { class: 'spacer' }), pauseBtn, cancelBtn, go),
+    h('div', { class: 'hint' }, '入库在服务器后台进行：关闭本窗口不会中断，完成后会提示。')));
   renderList();
 }
 

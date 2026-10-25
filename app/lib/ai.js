@@ -122,30 +122,36 @@ export function undoAiEdit(draftId, key) {
 }
 
 /** AI 自动打标：每批 8 页；结果标记 tag_source=ai，等待人工确认 */
-export async function autoTag(ids) {
+export async function autoTag(ids, job = { step() {}, async checkpoint() {} }) {
   const tax = loadTaxonomy();
   const dims = tax.dimensions.map((d) => `- ${d.key}：${d.values.join('、')}`).join('\n');
   const done = [];
-  for (let i = 0; i < ids.length; i += 8) {
-    const batch = ids.slice(i, i + 8).map((id) => getSlide(id));
-    const { content } = await chat([
-      { role: 'system', content: `你是银行数智化售前素材库的管理员，负责给幻灯片打标签。标签维度与可选值：\n${dims}\n
+  try {
+    for (let i = 0; i < ids.length; i += 8) {
+      job.step('AI 打标', i, ids.length);
+      await job.checkpoint();
+      const batch = ids.slice(i, i + 8).map((id) => getSlide(id));
+      const { content } = await chat([
+        { role: 'system', content: `你是银行数智化售前素材库的管理员，负责给幻灯片打标签。标签维度与可选值：\n${dims}\n
 规则：每个维度选 0–3 个最贴切的值，优先使用已有值，确有必要才新增；出现具体客户名称或客户专属数据的页面，customer 填客户名、scope 为 "customer-specific"，否则 customer 为空、scope 为 "universal"。
 只输出 JSON：{"<页面id>": {"tags": {"维度": ["值"]}, "customer": "", "scope": "universal"}}` },
-      { role: 'user', content: batch.map((s) => `### ${s.id}\n来源：${s.deck_title || ''}\n标题：${s.title}\n全文：${(s.text || '').slice(0, 1200)}`).join('\n\n') },
-    ], { temperature: 0.1 });
-    const res = extractJson(content);
-    for (const s of batch) {
-      const p = res[s.id];
-      if (!p) continue;
-      const tags = Object.fromEntries(Object.entries(p.tags || {}).filter(([k]) => tax.dimensions.some((d) => d.key === k)));
-      const meta = applyTags(s.id, { tags, customer: p.customer || '', scope: p.scope === 'customer-specific' ? 'customer-specific' : 'universal', tag_source: 'ai' });
-      done.push({ id: meta.id, title: meta.title, tags: meta.tags, customer: meta.customer, scope: meta.scope });
+        { role: 'user', content: batch.map((s) => `### ${s.id}\n来源：${s.deck_title || ''}\n标题：${s.title}\n全文：${(s.text || '').slice(0, 1200)}`).join('\n\n') },
+      ], { temperature: 0.1 });
+      const res = extractJson(content);
+      for (const s of batch) {
+        const p = res[s.id];
+        if (!p) continue;
+        const tags = Object.fromEntries(Object.entries(p.tags || {}).filter(([k]) => tax.dimensions.some((d) => d.key === k)));
+        const meta = applyTags(s.id, { tags, customer: p.customer || '', scope: p.scope === 'customer-specific' ? 'customer-specific' : 'universal', tag_source: 'ai' });
+        done.push({ id: meta.id, title: meta.title, tags: meta.tags, customer: meta.customer, scope: meta.scope });
+      }
     }
-  }
-  if (done.length) {
-    const { file } = appendEvent('tag_edit', { slide_ids: done.map((x) => x.id), by: 'ai' });
-    commitAndPush([rel(LIB), rel(file)], `[AI打标] ${done.length} 页 by ${identity().name}`);
+  } finally {
+    // 中途取消/出错时，已打好的标签也照常提交
+    if (done.length) {
+      const { file } = appendEvent('tag_edit', { slide_ids: done.map((x) => x.id), by: 'ai' });
+      commitAndPush([rel(LIB), rel(file)], `[AI打标] ${done.length} 页 by ${identity().name}`);
+    }
   }
   return done;
 }

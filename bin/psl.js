@@ -16,6 +16,7 @@ const HELP = `psl —— 售前素材库命令行（所有输出为 JSON）
   psl import-pptx <deck.pptx> [同上参数]       旧 PPTX 入库：HTML 主标题 + 整页图
   psl import-pdf <file.pdf> [同上参数]         PDF 入库：每页整页图 + 提取的文字
   psl import-images <a.png> [b.jpg …] [同上参数]  图片入库：每张一页
+  psl repair-images <deckId> <deck.pptx>      已入库 PPTX deck 有缺图页时，用同一份 PPTX 补全整页图（id/标签/血缘不变）
   psl ai-tag [slideId …]                     AI 自动打标（默认对所有待打标页）
 AI 与配置
   psl config llm --base-url https://api.deepseek.com/v1 --api-key sk-… --model deepseek-chat   配置 OpenAI 兼容模型
@@ -181,6 +182,7 @@ async function main() {
       case 'ai-rewrite': { const { rewriteSlide } = await import('../app/lib/ai.js'); return out(await rewriteSlide(pos[0], pos[1], opt.instruction || pos.slice(2).join(' '))); }
       case 'ai-undo': { const { undoAiEdit } = await import('../app/lib/ai.js'); return out(undoAiEdit(pos[0], pos[1])); }
       case 'ingest-html': { const { ingestHtml } = await import('../app/lib/ingest.js'); return out(await ingestHtml(pos[0], ingestOpts(opt))); }
+      case 'repair-images': { const { repairPptxImages } = await import('../app/lib/ingest.js'); return out(await repairPptxImages(pos[0], pos[1])); }
       case 'import-pptx': { const { importPptx } = await import('../app/lib/ingest.js'); return out(await importPptx(pos[0], ingestOpts(opt))); }
       case 'render-thumbs': {
         const { renderThumbs } = await import('../app/lib/ingest.js');

@@ -29,6 +29,8 @@ allowed-tools:
   - 新做的 deck 必须遵循 `references/slide-spec.md`（每页一个 `<section class="slide">`，可编辑文字加 `data-editable`）。
 - 旧 PPTX：`psl import-pptx <file.pptx> --title "标题" --slug <英文短名>`
   - 主标题会转成 HTML 文字，整页渲染成一张图（Mac 用 PowerPoint，首次会弹"授予访问权限"，请提醒用户点允许；Windows 用 PowerPoint COM；否则用 LibreOffice）。
+  - 原 PPT 的隐藏页也会入库（meta `source.hidden: true`）。
+  - 已入库的 deck 有缺图页（`source.image: false`）时，不要重新导入（会产生重复 deck），用同一份 PPTX 补图：`psl repair-images <deckId> <file.pptx>`（页面 id、标签、血缘不变）。
 - PDF：`psl import-pdf <file.pdf> …`；图片：`psl import-images a.png b.jpg … --title "标题"`（多张合成一个 deck）；或用 `psl ingest <文件>` 按扩展名自动选择。
 - 用户也可以在网页右上角"上传素材"里直接拖拽上传（支持 AI 自动打标）。
 - `--slug` 用 2–4 个英文/拼音单词（如 `retail-payroll`），用于生成页面 id。

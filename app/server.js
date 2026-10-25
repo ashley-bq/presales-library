@@ -10,7 +10,7 @@ import { promoteDraft } from './lib/promote.js';
 import { slideDocument } from './lib/render.js';
 import { appendEvent } from './lib/events.js';
 import { identity, requestUser } from './lib/identity.js';
-import { ingestFile, importImages, IMAGE_EXT } from './lib/ingest.js';
+import { ingestFile, importImages, repairPptxImages, IMAGE_EXT } from './lib/ingest.js';
 import { rewriteSlide, undoAiEdit, autoTag } from './lib/ai.js';
 import { llmEnabled, loadConfig } from './lib/config.js';
 import { login, verify, parseCookies, listUsers } from './lib/auth.js';
@@ -77,7 +77,52 @@ function slideDoc(dir, urlBase, theme, edit) {
 
 const uploadDir = () => path.join(UPLOADS, identity().slug);
 
-async function handleUploadIngest({ items = [], title, customer, theme, report_type, auto_tag = true }) {
+/* ---------- 后台任务（上传入库）：进度 / 暂停 / 继续 / 取消 ---------- */
+const jobs = new Map();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const jobView = ({ ctl, ...j }) => j;
+
+function startJob(label, fn) {
+  const ac = new AbortController();
+  const job = { id: shortId(10), owner: identity().slug, label, state: 'queued', stage: '排队中（等待其他写操作完成）', done: 0, total: 0, paused: false, result: null, error: null, created_at: Date.now() };
+  let prefix = '';
+  const ctl = {
+    signal: ac.signal,
+    prefix(p) { prefix = p; },
+    step(stage, done = 0, total = 0) { Object.assign(job, { stage: prefix + stage, done, total }); },
+    async checkpoint() {
+      while (job.paused && !ac.signal.aborted) { job.state = 'paused'; await sleep(300); }
+      if (ac.signal.aborted) fail('已取消');
+      job.state = 'running';
+    },
+    abort() { ac.abort(); },
+  };
+  job.ctl = ctl;
+  jobs.set(job.id, job);
+  serial(async () => {
+    job.state = 'running'; // 排队时已取消的任务也走一遍，以便清理上传的临时文件
+    try { job.result = await fn(ctl); job.state = job.result?.cancelled ? 'cancelled' : 'done'; } catch (e) {
+      job.state = ac.signal.aborted ? 'cancelled' : 'error';
+      job.error = ac.signal.aborted ? '已取消' : e.message;
+      if (!ac.signal.aborted && !e.expose) console.error(e);
+    } finally {
+      job.paused = false;
+      job.finished_at = Date.now();
+      invalidate();
+      notify({ type: 'library' });
+      setTimeout(() => jobs.delete(job.id), 30 * 60 * 1000).unref?.();
+    }
+  });
+  return job;
+}
+
+function ownJob(id) {
+  const j = jobs.get(id);
+  if (!j || j.owner !== identity().slug) fail('任务不存在或已过期');
+  return j;
+}
+
+async function handleUploadIngest({ items = [], title, customer, theme, report_type, auto_tag = true, repair = {} }, job) {
   if (!items.length) fail('请先选择文件');
   const files = items.map((it) => {
     if (!/^[\w.-]+$/.test(it.token || '')) fail('上传凭证不合法');
@@ -85,26 +130,38 @@ async function handleUploadIngest({ items = [], title, customer, theme, report_t
     if (!fs.existsSync(p)) fail(`上传文件已失效，请重新上传：${it.name}`);
     return { path: p, name: it.name || it.token };
   });
-  const opts = { customer: customer || '', theme: theme || undefined, reportType: report_type || '' };
-  const results = [];
+  const opts = { customer: customer || '', theme: theme || undefined, reportType: report_type || '', job };
+  const results = [], repaired = [];
   const images = files.filter((f) => IMAGE_EXT.test(f.name));
   const others = files.filter((f) => !IMAGE_EXT.test(f.name));
+  const steps = others.length + (images.length ? 1 : 0);
+  let cancelled = false;
   try {
-    for (const f of others) {
-      results.push({ file: f.name, ...(await ingestFile(f.path, { ...opts, sourceName: f.name, title: others.length === 1 && !images.length ? title || undefined : undefined })) });
+    for (const [i, f] of others.entries()) {
+      job.prefix(`文件 ${i + 1}/${steps}「${f.name}」· `);
+      if (repair[f.name]) repaired.push({ file: f.name, ...(await repairPptxImages(repair[f.name], f.path, opts)) });
+      else results.push({ file: f.name, ...(await ingestFile(f.path, { ...opts, sourceName: f.name, title: others.length === 1 && !images.length ? title || undefined : undefined })) });
     }
-    if (images.length) results.push({ file: images.map((f) => f.name).join('、'), ...(await importImages(images, { ...opts, title: title || undefined })) });
+    if (images.length) {
+      job.prefix(`文件 ${steps}/${steps}（${images.length} 张图片）· `);
+      results.push({ file: images.map((f) => f.name).join('、'), ...(await importImages(images, { ...opts, title: title || undefined })) });
+    }
+  } catch (e) {
+    if (!job.signal.aborted) throw e;
+    cancelled = true;
   } finally {
     for (const f of files) fs.rmSync(f.path, { force: true });
   }
   const ids = results.flatMap((r) => r.untagged.map((u) => u.id));
   let tagged = [], tag_error = null;
-  if (auto_tag && llmEnabled() && ids.length) {
-    try { tagged = await autoTag(ids); } catch (e) { tag_error = e.message; }
+  if (!cancelled && auto_tag && llmEnabled() && ids.length) {
+    job.prefix('');
+    try { tagged = await autoTag(ids, job); } catch (e) { if (job.signal.aborted) { cancelled = true; tag_error = '已取消 AI 打标（素材已入库，已打好的标签已保存）'; } else tag_error = e.message; }
   }
-  invalidate();
   return {
-    decks: results.map((r) => ({ file: r.file, deck_id: r.deck_id, slides: r.untagged.map((u) => ({ id: u.id, title: u.title })), rendered_images: r.rendered_images, git: r.git })),
+    cancelled,
+    decks: results.map((r) => ({ file: r.file, deck_id: r.deck_id, slides: r.untagged.map((u) => ({ id: u.id, title: u.title })), pages: r.pages, rendered_images: r.rendered_images, hidden_pages: r.hidden_pages, git: r.git })),
+    repaired: repaired.map((r) => ({ file: r.file, deck_id: r.deck_id, count: r.repaired.length, note: r.note })),
     auto_tagged: tagged.length, tag_error, llm: llmEnabled(),
   };
 }
@@ -175,7 +232,17 @@ async function api(req, res, url) {
   }
   if (a === 'upload' && b === 'ingest' && m === 'POST') {
     const payload = await body(req);
-    return serial(async () => send(res, 200, await handleUploadIngest(payload)));
+    const job = startJob(`入库 ${(payload.items || []).map((x) => x.name).join('、')}`, (ctl) => handleUploadIngest(payload, ctl));
+    return send(res, 200, { job: jobView(job) });
+  }
+  if (a === 'jobs' && b && !c && m === 'GET') return send(res, 200, jobView(ownJob(b)));
+  if (a === 'jobs' && b && ['pause', 'resume', 'cancel'].includes(c) && m === 'POST') {
+    const j = ownJob(b);
+    if (['done', 'error', 'cancelled'].includes(j.state)) return send(res, 200, jobView(j));
+    if (c === 'pause') j.paused = true;
+    if (c === 'resume') { j.paused = false; if (j.state === 'paused') j.state = 'running'; }
+    if (c === 'cancel') { j.paused = false; j.ctl.abort(); if (j.state === 'queued') j.state = 'cancelled'; }
+    return send(res, 200, jobView(j));
   }
   if (a === 'ai' && b === 'rewrite' && m === 'POST') {
     const { draft, key, instruction } = await body(req);
