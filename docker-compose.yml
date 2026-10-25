@@ -2,7 +2,11 @@
 # 先复制 deploy/.env.example 为 .env 并填写；部署密钥放到 deploy/ssh/id_ed25519
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        NPM_MIRROR: ${NPM_MIRROR:-}
     restart: unless-stopped
     env_file: .env
     environment:
