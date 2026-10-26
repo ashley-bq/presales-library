@@ -1,0 +1,4 @@
+# 素材库管理员：可以删除已入库的页面（网页详情 / 购物车"删除所选" / psl delete）
+# 服务器模式按登录账号判断（users，账号 role=admin 也算）；本地模式按 Git 邮箱判断（emails）
+users: [ashley]
+emails: [ashleyxu0926@gmail.com]

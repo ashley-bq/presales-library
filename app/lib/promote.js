@@ -23,7 +23,7 @@ export async function promoteDraft(id, { keys, note = '' } = {}) {
   const mapping = {};
   for (const [i, s] of picked.entries()) {
     const dir = draftSlideDir(id, s.key);
-    const parent = s.source_id ? getSlide(s.source_id) : null;
+    const parent = s.source_id && fs.existsSync(path.join(slideDir(s.source_id), 'meta.json')) ? getSlide(s.source_id) : null; // 来源页可能已被管理员删除
     const prefix = parent ? parent.id.replace(/-\d{2}-[0-9a-f]{4}$/, '') : asciiSlug(d.name, 'deck');
     const html = fs.readFileSync(path.join(dir, 'slide.html'), 'utf8');
     const files = listFiles(dir).filter((f) => f !== 'slide.html').map((f) => ({ name: f, src: path.join(dir, f) }));

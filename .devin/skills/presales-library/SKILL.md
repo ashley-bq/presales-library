@@ -30,6 +30,7 @@ allowed-tools:
 - 旧 PPTX：`psl import-pptx <file.pptx> --title "标题" --slug <英文短名>`
   - 主标题会转成 HTML 文字，整页渲染成一张图（Mac 用 PowerPoint，首次会弹"授予访问权限"，请提醒用户点允许；Windows 用 PowerPoint COM；否则用 LibreOffice）。
   - 原 PPT 的隐藏页也会入库（meta `source.hidden: true`）。
+  - PPTX / PDF 默认跳过封面（首页）、封底（联系我们/Boilerplate/谢谢）、目录（含反复出现的章节过渡页）和人物介绍页（参会人员/个人简介/含手机邮箱），按文字识别，纯图页一律保留；跳过的页列在输出的 `skipped` 和 deck 的 `skipped` 字段里，`source.page` 仍是原文件页码。要全部入库加 `--keep-all`（网页上传取消勾选"跳过封面、封底、目录和人物介绍页"）。
   - 已入库的 deck 有缺图页（`source.image: false`）时，不要重新导入（会产生重复 deck），用同一份 PPTX 补图：`psl repair-images <deckId> <file.pptx>`（页面 id、标签、血缘不变）。
 - PDF：`psl import-pdf <file.pdf> …`；图片：`psl import-images a.png b.jpg … --title "标题"`（多张合成一个 deck）；或用 `psl ingest <文件>` 按扩展名自动选择。
 - 用户也可以在网页右上角"上传素材"里直接拖拽上传（支持 AI 自动打标）。
@@ -84,6 +85,12 @@ allowed-tools:
 - `psl history <slideId>`：版本树（原创 → 微调）、每次临时修改的记录，以及每次 AI 改写（`ai_edits`：要求、模型、改动）。
 - `psl show <slideId>`：元数据、HTML 文件路径、版本树。
 - 用中文简洁汇总给用户，必要时用表格。
+
+## 5.5 删除页面（仅管理员）
+
+- 管理员名单在 `library/admins.yaml`（服务器模式按登录账号 `users` 或账号 role=admin；本地模式按 Git 邮箱 `emails`），目前是 ashley。
+- 这是"不要直接改 library/slides/"的唯一例外：只能用 `psl delete <slideId …>`（先不加 `--yes` 预览，确认后加 `--yes [--reason 说明]`），或网页详情抽屉/购物车里的"删除"按钮，不要手动 rm。
+- 删除会移除页面目录、从 deck 中去掉（deck 删空则一并删除），记录 `slide_delete` 事件并提交同步；引用它的微调页保留，草稿里已有的副本不受影响。
 
 ## 6. 同步与排错
 

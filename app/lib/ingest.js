@@ -10,6 +10,7 @@ import { commitAndPush, pull } from './git.js';
 import { identity } from './identity.js';
 import { asciiSlug, shortId, today, nowIso, decodeEntities, escapeHtml, fail, contentHash } from './util.js';
 import { rel, SLIDES, DECKS, CACHE } from './paths.js';
+import { splitPages } from './skip.js';
 
 const SECTION_RE = /<section\b[^>]*class\s*=\s*["'][^"']*\bslide\b[^"']*["'][^>]*>[\s\S]*?<\/section>/gi;
 const run = promisify(execFile);
@@ -37,12 +38,15 @@ function deckRecord(opts, slideIds, format, sourceFile) {
     id, title: opts.title, customer: opts.customer || '', report_type: opts.reportType || '',
     format, source_file: sourceFile ? path.basename(sourceFile) : null,
     slides: slideIds, author: me.display, created_at: nowIso(),
+    ...(opts.sourcePages ? { source_pages: opts.sourcePages } : {}),
+    ...(opts.skipped?.length ? { skipped: opts.skipped } : {}),
   };
   saveDeck(deck);
   return deck;
 }
 
 async function finish(deck, slides, format, job = NOJOB) {
+  const skipped = deck.skipped || [];
   try {
     await renderThumbs(slides.map((s) => s.id), job);
     await job.checkpoint();
@@ -51,7 +55,7 @@ async function finish(deck, slides, format, job = NOJOB) {
   const { file } = appendEvent('ingest', { deck_id: deck.id, deck_title: deck.title, format, slide_ids: slides.map((s) => s.id) });
   const git = commitAndPush([rel(SLIDES), rel(DECKS), rel(file)], `[入库] ${deck.title}（${slides.length} 页）by ${identity().name}`);
   return {
-    deck_id: deck.id, git, untagged: slides.map((s) => ({ id: s.id, title: s.title, text: s.text.slice(0, 600) })),
+    deck_id: deck.id, git, skipped, untagged: slides.map((s) => ({ id: s.id, title: s.title, text: s.text.slice(0, 600) })),
     next: '请为以上页面打标：psl tag --file tags.json（格式见 SKILL.md），或在网页详情里编辑',
   };
 }
@@ -230,13 +234,22 @@ const noImageNote = (renderer) => renderer
   ? '（这一页的整页图没有生成成功：可在"上传素材"里重新上传同名 PPTX，选择"补全缺图页"）'
   : '（未能渲染原页图片：服务器缺少 PowerPoint / LibreOffice）';
 
+/** 默认跳过封面/封底/目录/人物介绍页；opts.keepAll 为 true 时全部入库 */
+function pickPages(pages, opts) {
+  if (opts.keepAll) return { keep: pages.map((p, i) => ({ ...p, page: i + 1 })), skipped: [] };
+  const r = splitPages(pages);
+  if (!r.keep.length) fail('所有页面都被识别为封面/封底/目录/人物介绍页，请取消"跳过封面、封底、目录和人物介绍页"后重新上传');
+  return r;
+}
+
 export async function importPptx(file, opts = {}) {
   pull();
   const job = opts.job || NOJOB;
   const { pages, images, renderer, work } = await renderPptx(file, job);
   try {
-    const res = await imageDeck(pages, { ...opts, noImage: noImageNote(renderer) }, 'pptx', file);
-    return { ...res, rendered_images: images.length, pages: pages.length, hidden_pages: pages.filter((p) => p.hidden).length, renderer };
+    const { keep, skipped } = pickPages(pages, opts);
+    const res = await imageDeck(keep, { ...opts, noImage: noImageNote(renderer), sourcePages: pages.length, skipped }, 'pptx', file);
+    return { ...res, rendered_images: images.length, pages: pages.length, hidden_pages: keep.filter((p) => p.hidden).length, renderer };
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 
@@ -245,11 +258,12 @@ export async function repairPptxImages(deckId, file, opts = {}) {
   pull();
   const job = opts.job || NOJOB;
   const deck = listDecks().find((d) => d.id === deckId) || fail(`没有这个 deck：${deckId}`);
-  const missing = deck.slides.map((id, i) => ({ id, i, meta: getSlide(id) })).filter((x) => x.meta && !x.meta.source?.image);
+  const missing = deck.slides.map((id, i) => ({ id, meta: getSlide(id) })).map((x, i) => ({ ...x, i: (x.meta.source?.page || i + 1) - 1 })).filter((x) => x.meta && !x.meta.source?.image);
   if (!missing.length) return { deck_id: deckId, repaired: [], note: '这个 deck 没有缺图页' };
   const { pages, images, work } = await renderPptx(file, job);
   try {
-    if (pages.length !== deck.slides.length) fail(`上传的 PPTX 有 ${pages.length} 页，库中「${deck.title}」有 ${deck.slides.length} 页，不是同一份文件，不能补图`);
+    const expected = deck.source_pages || deck.slides.length;
+    if (pages.length !== expected) fail(`上传的 PPTX 有 ${pages.length} 页，库中「${deck.title}」的原文件有 ${expected} 页，不是同一份文件，不能补图`);
     if (!images.length) fail('整页图仍然没有渲染出来，请检查 PowerPoint / LibreOffice');
     const repaired = [];
     for (const { id, i, meta } of missing) {
@@ -284,18 +298,19 @@ async function imageDeck(pages, opts, format, file) {
   try {
     for (const [i, pg] of pages.entries()) {
       job.step('写入页面', i, pages.length);
-      const t = pg.title || `${title} 第 ${i + 1} 页`;
+      const page = pg.page || i + 1;
+      const t = pg.title || `${title} 第 ${page} 页`;
       const ext = pg.image ? path.extname(pg.image).toLowerCase() || '.jpg' : '';
       const html = `<section class="slide layout-image-page" data-layout="image-page">
   <h2 data-editable>${escapeHtml(t)}</h2>
   <div class="page-image">${pg.image ? `<img src="assets/page${ext}" alt="" data-replaceable>` : `<p class="muted">${escapeHtml(opts.noImage || '（这一页没有整页图）')}</p>`}</div>
 </section>`;
       slides.push(createSlide({
-        id: newSlideId(prefix, i + 1), html, files: pg.image ? [{ name: `assets/page${ext}`, src: pg.image }] : [],
+        id: newSlideId(prefix, page), html, files: pg.image ? [{ name: `assets/page${ext}`, src: pg.image }] : [],
         meta: {
           title: t, text: [pg.text || t, pg.notes && `备注：${pg.notes}`].filter(Boolean).join('\n'), theme,
           customer: opts.customer || '', scope: opts.customer ? 'customer-specific' : 'universal',
-          source: { format, deck_id: null, page: i + 1, file: pg.file || fileName, image: !!pg.image, ...(pg.hidden ? { hidden: true } : {}) },
+          source: { format, deck_id: null, page, file: pg.file || fileName, image: !!pg.image, ...(pg.hidden ? { hidden: true } : {}) },
         },
       }));
     }
@@ -314,7 +329,9 @@ export async function importPdf(file, opts = {}) {
   try {
     const pages = await pdfPages(file, work, { onEach: async (i, n) => { job.step('渲染 PDF 页面', i, n); await job.checkpoint(); } });
     if (!pages.length) fail('PDF 没有页面');
-    return await imageDeck(pages.map((p) => ({ title: p.title, text: p.text, image: p.file })), opts, 'pdf', file);
+    const { keep, skipped } = pickPages(pages.map((p) => ({ title: p.title, text: p.text, image: p.file })), opts);
+    const res = await imageDeck(keep, { ...opts, sourcePages: pages.length, skipped }, 'pdf', file);
+    return { ...res, pages: pages.length };
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 

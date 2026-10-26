@@ -243,6 +243,7 @@ function renderCart() {
     S.cart.items.length ? items : h('div', { class: 'items' }, h('div', { class: 'empty' }, '从左侧挑选页面')),
     h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => { S.cart.items = []; saveCart(); renderCart(); renderGrid(); } }, '清空'),
+      S.index.me?.admin && S.cart.items.length ? h('button', { class: 'btn danger', title: '管理员：从素材库删除购物车里的页面', onclick: run(async () => { if (await deleteSlidesUi([...S.cart.items])) { renderCart(); doSearch(); } }) }, `删除所选（${S.cart.items.length}）`) : null,
       h('button', { class: 'btn primary', disabled: !S.cart.items.length, onclick: run(async () => {
         const d = await api('/drafts', { method: 'POST', json: { name: S.cart.name || '未命名 deck', customer: S.cart.customer, theme: S.cart.theme, slide_ids: S.cart.items } });
         S.cart = { items: [], name: '', customer: '', theme: S.cart.theme }; saveCart();
@@ -290,7 +291,7 @@ function openUpload() {
   const bar = h('i');
   const progress = h('div', { class: 'progress', style: { display: 'none' } }, bar);
   const llm = S.index.llm?.enabled;
-  const form = { title: '', customer: '', theme: 'light', report_type: '', auto_tag: llm };
+  const form = { title: '', customer: '', theme: 'light', report_type: '', auto_tag: llm, skip_boilerplate: true };
   let busy = false, currentUpload = null, jobId = null, jobState = null;
   const renderList = () => fill(list, files.length ? files.map((f, i) => {
     const miss = /\.pptx$/i.test(f.name) && missingImages(f.name);
@@ -345,6 +346,12 @@ function openUpload() {
     if (r.tag_error) parts.push(`AI 打标：${r.tag_error}`);
     if (r.cancelled) parts.unshift('已取消');
     toast(parts.join('；') || '已取消，没有入库任何页面', !!r.tag_error || r.cancelled, 9000);
+    const skipped = r.decks.flatMap((d) => d.skipped || []);
+    if (skipped.length) {
+      const by = {};
+      for (const x of skipped) by[x.label] = (by[x.label] || 0) + 1;
+      toast(`已跳过 ${skipped.length} 页（${Object.entries(by).map(([k, v]) => `${k} ${v}`).join('、')}）：${skipped.map((x) => `第${x.page}页`).join('、')}`, false, 10000);
+    }
     const hidden = r.decks.reduce((n, d) => n + (d.hidden_pages || 0), 0);
     if (hidden) toast(`其中 ${hidden} 页在原 PPT 中是隐藏页，也已一并入库`, false, 8000);
     if (r.decks.some((d) => d.pages && d.rendered_images === 0)) toast('有 PPTX 未能渲染整页图：Mac 请在 PowerPoint 弹窗中"授予访问权限"后重新上传（会提示"补全缺图页"）', true, 12000);
@@ -404,10 +411,27 @@ function openUpload() {
     h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: form.auto_tag, disabled: !llm, onchange: (e) => { form.auto_tag = e.target.checked; } }),
       llm ? `入库后用 AI 自动打标（${S.index.llm.model}）` : 'AI 自动打标不可用：管理员需先配置模型（psl config llm …）'),
+    h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+      h('input', { type: 'checkbox', checked: form.skip_boilerplate, onchange: (e) => { form.skip_boilerplate = e.target.checked; } }),
+      'PPTX / PDF 跳过封面、封底、目录和人物介绍页（按文字识别）'),
     progress,
     h('div', { class: 'bar2' }, status, h('div', { class: 'spacer' }), pauseBtn, cancelBtn, go),
     h('div', { class: 'hint' }, '入库在服务器后台进行：关闭本窗口不会中断，完成后会提示。')));
   renderList();
+}
+
+// ---------- 管理员删除 ----------
+async function deleteSlidesUi(ids) {
+  const plan = await api('/slides/delete-plan', { method: 'POST', json: { ids } });
+  const lines = [`确定从素材库删除以下 ${plan.slides.length} 页？删除后所有人都看不到，且无法在网页里恢复。`, '',
+    ...plan.slides.slice(0, 15).map((x) => `· ${x.title}${x.deck_title ? `（${x.deck_title}）` : ''}`), plan.slides.length > 15 ? `…… 共 ${plan.slides.length} 页` : '',
+    plan.children.length ? `\n其中有 ${plan.children.length} 个微调版本引用这些页，它们会保留。` : ''];
+  if (!confirm(lines.filter((x) => x !== '').join('\n'))) return false;
+  const r = await api('/slides/delete', { method: 'POST', json: { ids } });
+  toast(`已删除 ${r.deleted.length} 页${r.git?.pushed === false && r.git?.error ? `（同步失败：${r.git.error}）` : ''}`);
+  S.cart.items = S.cart.items.filter((id) => !ids.includes(id)); saveCart();
+  await loadIndex();
+  return true;
 }
 
 // ---------- 详情抽屉 ----------
@@ -458,6 +482,7 @@ const openDetail = run(async (id) => {
       h('h2', {}, s.title),
       h('div', { class: 'bar2' },
         h('button', { class: 'btn', onclick: () => { if (!S.cart.items.includes(s.id)) S.cart.items.push(s.id); saveCart(); S.selecting = true; close(); route(); toast('已加入购物车'); } }, S.cart.items.includes(s.id) ? '已在购物车' : '加入购物车'),
+        S.index.me?.admin && h('button', { class: 'btn danger', onclick: run(async () => { if (await deleteSlidesUi([s.id])) { close(); if (location.hash.startsWith('#/stats')) route(); else doSearch(); } }) }, '删除'),
         h('button', { class: 'btn ghost', onclick: close }, '关闭'))),
     h('div', { class: 'hint', style: { marginBottom: '12px' } }, s.id),
     frame(`/render/slide/${encodeURIComponent(s.id)}`),
@@ -687,7 +712,7 @@ const pickTemplate = run(async () => {
 // ---------- 统计 ----------
 const statsView = run(async () => {
   const st = await api('/stats');
-  const typeLabel = { export: '导出', ingest: '入库', promote: '再入库', tag_edit: '打标', ai_edit: 'AI改写', ai_undo: '撤销AI' };
+  const typeLabel = { export: '导出', ingest: '入库', promote: '再入库', tag_edit: '打标', ai_edit: 'AI改写', ai_undo: '撤销AI', slide_delete: '删除' };
   fill($app, h('div', { class: 'shell' }, topbar([h('div', { class: 'counts' }, `共 ${st.counts.exports} 次导出 · ${st.counts.slides} 页`), h('div', { class: 'spacer' }),
     h('button', { class: 'btn ghost', onclick: () => { location.hash = '#/'; } }, '← 返回素材库')]),
   h('div', { class: 'main' },
@@ -712,6 +737,7 @@ const statsView = run(async () => {
         : e.type === 'ingest' ? `「${e.deck_title}」${e.slide_ids.length} 页`
           : e.type === 'promote' ? `「${e.deck_name}」${e.slides.length} 页${e.note ? `：${e.note}` : ''}`
             : e.type === 'ai_edit' || e.type === 'ai_undo' ? `「${e.deck_name}」第 ${e.pos} 页：${e.instruction}`
+            : e.type === 'slide_delete' ? `${e.slides.length} 页：${e.slides.slice(0, 3).map((x) => x.title).join('、')}${e.slides.length > 3 ? ' 等' : ''}${e.reason ? `（${e.reason}）` : ''}`
             : `${(e.slide_ids || [e.slide_id]).length} 页`)))))));
 });
 

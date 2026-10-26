@@ -4,7 +4,7 @@
 
 - **访问地址**：http://49.232.207.25 （HTTP；配域名后改 HTTPS）
 - **服务器**：腾讯云轻量应用服务器，2核4G，Ubuntu 24.04 + Docker 29
-- **登录账号**：`ashley`（admin）。密码问管理员或登录服务器用 `psl user passwd` 重置
+- **登录账号**：`ashley`（admin，也是素材库管理员，可删除资源页；名单见 `library/admins.yaml`）。密码问管理员或登录服务器用 `psl user passwd` 重置
 - **素材库**：已通过 GitHub `ashley-bq/presales-library` 同步；当前为空，等待导入真实材料
 - **AI**：DeepSeek（`deepseek-chat`），Key 在服务器 `.env`（不在 Git 里）
 

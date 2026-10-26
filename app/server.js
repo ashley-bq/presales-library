@@ -9,7 +9,8 @@ import { exportDraft } from './lib/export.js';
 import { promoteDraft } from './lib/promote.js';
 import { slideDocument } from './lib/render.js';
 import { appendEvent } from './lib/events.js';
-import { identity, requestUser } from './lib/identity.js';
+import { identity, requestUser, isAdmin } from './lib/identity.js';
+import { deleteSlides, deletePlan } from './lib/delete.js';
 import { ingestFile, importImages, repairPptxImages, IMAGE_EXT } from './lib/ingest.js';
 import { rewriteSlide, undoAiEdit, autoTag } from './lib/ai.js';
 import { llmEnabled, loadConfig } from './lib/config.js';
@@ -122,7 +123,7 @@ function ownJob(id) {
   return j;
 }
 
-async function handleUploadIngest({ items = [], title, customer, theme, report_type, auto_tag = true, repair = {} }, job) {
+async function handleUploadIngest({ items = [], title, customer, theme, report_type, auto_tag = true, skip_boilerplate = true, repair = {} }, job) {
   if (!items.length) fail('请先选择文件');
   const files = items.map((it) => {
     if (!/^[\w.-]+$/.test(it.token || '')) fail('上传凭证不合法');
@@ -130,7 +131,7 @@ async function handleUploadIngest({ items = [], title, customer, theme, report_t
     if (!fs.existsSync(p)) fail(`上传文件已失效，请重新上传：${it.name}`);
     return { path: p, name: it.name || it.token };
   });
-  const opts = { customer: customer || '', theme: theme || undefined, reportType: report_type || '', job };
+  const opts = { customer: customer || '', theme: theme || undefined, reportType: report_type || '', keepAll: !skip_boilerplate, job };
   const results = [], repaired = [];
   const images = files.filter((f) => IMAGE_EXT.test(f.name));
   const others = files.filter((f) => !IMAGE_EXT.test(f.name));
@@ -160,7 +161,7 @@ async function handleUploadIngest({ items = [], title, customer, theme, report_t
   }
   return {
     cancelled,
-    decks: results.map((r) => ({ file: r.file, deck_id: r.deck_id, slides: r.untagged.map((u) => ({ id: u.id, title: u.title })), pages: r.pages, rendered_images: r.rendered_images, hidden_pages: r.hidden_pages, git: r.git })),
+    decks: results.map((r) => ({ file: r.file, deck_id: r.deck_id, slides: r.untagged.map((u) => ({ id: u.id, title: u.title })), pages: r.pages, rendered_images: r.rendered_images, hidden_pages: r.hidden_pages, skipped: r.skipped || [], git: r.git })),
     repaired: repaired.map((r) => ({ file: r.file, deck_id: r.deck_id, count: r.repaired.length, note: r.note })),
     auto_tagged: tagged.length, tag_error, llm: llmEnabled(),
   };
@@ -173,7 +174,7 @@ async function api(req, res, url) {
 
   if (a === 'index' && m === 'GET') {
     const ix = index();
-    const me = identity({ required: false });
+    const me = { ...identity({ required: false }), admin: isAdmin() };
     return send(res, 200, {
       counts: ix.counts, taxonomy: ix.taxonomy, facets: ix.facets, decks: ix.decks.length,
       slides: ix.slides.map(({ text, ...s }) => ({ ...s, snippet: text.slice(0, 160) })),
@@ -200,6 +201,14 @@ async function api(req, res, url) {
       const g = git.commitAndPush([rel(SLIDES), rel(path.join(LIB, 'taxonomy.yaml')), rel(file)], `[打标] ${meta.title} by ${identity().name}`);
       send(res, 200, { slide: meta, git: g });
     });
+  }
+  if (a === 'slides' && b === 'delete-plan' && m === 'POST') {
+    const { ids } = await body(req);
+    return send(res, 200, deletePlan(ids));
+  }
+  if (a === 'slides' && b === 'delete' && m === 'POST') {
+    const { ids, reason } = await body(req);
+    return serial(() => { const r = deleteSlides(ids, { reason }); invalidate(); notify({ type: 'library' }); send(res, 200, r); });
   }
   if (a === 'taxonomy' && m === 'POST') {
     const { dim, value } = await body(req);

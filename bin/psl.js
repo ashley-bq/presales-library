@@ -13,11 +13,12 @@ const HELP = `psl —— 售前素材库命令行（所有输出为 JSON）
   psl serve --server [--host 0.0.0.0]        服务器模式：多人通过网址访问，需账号登录
   psl ingest <文件>                           按扩展名自动入库（PPTX / PDF / 图片 / HTML）
   psl ingest-html <deck.html> [--title T] [--customer C] [--theme dark|light] [--slug ascii-slug] [--report-type 交流]
-  psl import-pptx <deck.pptx> [同上参数]       旧 PPTX 入库：HTML 主标题 + 整页图
+  psl import-pptx <deck.pptx> [同上参数] [--keep-all]   旧 PPTX 入库：HTML 主标题 + 整页图；默认跳过封面/封底/目录/人物介绍页，--keep-all 全部入库
   psl import-pdf <file.pdf> [同上参数]         PDF 入库：每页整页图 + 提取的文字
   psl import-images <a.png> [b.jpg …] [同上参数]  图片入库：每张一页
   psl repair-images <deckId> <deck.pptx>      已入库 PPTX deck 有缺图页时，用同一份 PPTX 补全整页图（id/标签/血缘不变）
   psl ai-tag [slideId …]                     AI 自动打标（默认对所有待打标页）
+  psl delete <slideId …> [--yes] [--reason 说明]   管理员删除已入库页面（不加 --yes 只预览）
 AI 与配置
   psl config llm --base-url https://api.deepseek.com/v1 --api-key sk-… --model deepseek-chat   配置 OpenAI 兼容模型
   psl ai-rewrite <draftId> <key> --instruction "改写要求"   AI 改写草稿中的一页（记录到使用日志）
@@ -58,7 +59,7 @@ function parseArgs(argv) {
 }
 const out = (o) => console.log(JSON.stringify(o, null, 2));
 const list = (s) => (typeof s === 'string' ? s.split(',').map((x) => x.trim()).filter(Boolean) : []);
-const ingestOpts = (o) => ({ title: o.title, customer: o.customer, theme: o.theme, slug: o.slug, reportType: o['report-type'] });
+const ingestOpts = (o) => ({ title: o.title, customer: o.customer, theme: o.theme, slug: o.slug, reportType: o['report-type'], keepAll: !!o['keep-all'] });
 
 async function doctor() {
   const checks = [];
@@ -188,6 +189,11 @@ async function main() {
         const { renderThumbs } = await import('../app/lib/ingest.js');
         const ids = pos.length ? pos : fs.readdirSync(SLIDES);
         await renderThumbs(ids); return out({ rendered: ids.length });
+      }
+      case 'delete': {
+        const del = await import('../app/lib/delete.js');
+        if (!opt.yes) return out({ preview: del.deletePlan(pos), next: '确认无误后加 --yes 执行删除' });
+        return out(del.deleteSlides(pos, { reason: opt.reason || '' }));
       }
       case 'untagged': return out(lib.listSlides().filter((s) => !s.tagged).map((s) => ({ id: s.id, title: s.title, deck: s.deck_title, customer: s.customer, text: s.text })));
       case 'taxonomy': return out(lib.loadTaxonomy());
