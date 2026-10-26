@@ -243,7 +243,7 @@ function renderCart() {
     S.cart.items.length ? items : h('div', { class: 'items' }, h('div', { class: 'empty' }, '从左侧挑选页面')),
     h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => { S.cart.items = []; saveCart(); renderCart(); renderGrid(); } }, '清空'),
-      S.index.me?.admin && S.cart.items.length ? h('button', { class: 'btn danger', title: '管理员：从素材库删除购物车里的页面', onclick: run(async () => { if (await deleteSlidesUi([...S.cart.items])) { renderCart(); doSearch(); } }) }, `删除所选（${S.cart.items.length}）`) : null,
+      S.index.me?.admin && S.cart.items.length ? h('button', { class: 'btn danger', title: '管理员：从素材库删除购物车里的页面', onclick: run(() => deleteSlidesUi([...S.cart.items])) }, `删除所选（${S.cart.items.length}）`) : null,
       h('button', { class: 'btn primary', disabled: !S.cart.items.length, onclick: run(async () => {
         const d = await api('/drafts', { method: 'POST', json: { name: S.cart.name || '未命名 deck', customer: S.cart.customer, theme: S.cart.theme, slide_ids: S.cart.items } });
         S.cart = { items: [], name: '', customer: '', theme: S.cart.theme }; saveCart();
@@ -431,6 +431,7 @@ async function deleteSlidesUi(ids) {
   toast(`已删除 ${r.deleted.length} 页${r.git?.pushed === false && r.git?.error ? `（同步失败：${r.git.error}）` : ''}`);
   S.cart.items = S.cart.items.filter((id) => !ids.includes(id)); saveCart();
   await loadIndex();
+  route();
   return true;
 }
 
@@ -482,7 +483,7 @@ const openDetail = run(async (id) => {
       h('h2', {}, s.title),
       h('div', { class: 'bar2' },
         h('button', { class: 'btn', onclick: () => { if (!S.cart.items.includes(s.id)) S.cart.items.push(s.id); saveCart(); S.selecting = true; close(); route(); toast('已加入购物车'); } }, S.cart.items.includes(s.id) ? '已在购物车' : '加入购物车'),
-        S.index.me?.admin && h('button', { class: 'btn danger', onclick: run(async () => { if (await deleteSlidesUi([s.id])) { close(); if (location.hash.startsWith('#/stats')) route(); else doSearch(); } }) }, '删除'),
+        S.index.me?.admin && h('button', { class: 'btn danger', onclick: run(() => deleteSlidesUi([s.id])) }, '删除'),
         h('button', { class: 'btn ghost', onclick: close }, '关闭'))),
     h('div', { class: 'hint', style: { marginBottom: '12px' } }, s.id),
     frame(`/render/slide/${encodeURIComponent(s.id)}`),
