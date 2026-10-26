@@ -25,6 +25,13 @@
 | AI 模型 | DeepSeek 已配置：服务器 `.env` + 部署机本机 `psl config llm`。**Key 不在仓库里** |
 | Git | `git@github.com:ashley-bq/presales-library.git`（private），main 为唯一分支，工作区干净 |
 
+## 主要功能（截至 2026-10-26）
+
+- 上传 PPTX / PDF / 图片 / HTML：后台任务，可看进度、暂停、继续、取消；默认去掉封面/封底/目录/人员介绍页（AI 识别，规则兜底）；隐藏页也会入库；缺图页可"补全"。
+- 按需求推荐：输入 storyline / 需求 → AI 拆章节 → 每章从库里挑页并给理由 → 一键放入购物车拼装（`psl suggest`）。
+- 管理员删除页面：`library/admins.json`（当前 Ashley），网页详情"删除此页"或购物车"从库中删除这 N 页"（`psl delete`）。
+- 拼 deck → 草稿编辑 / AI 改写（有记录、可撤销）→ 导出 zip / PPTX → 讲完入库为"微调"；使用排行与版本树。
+
 ## 架构速览
 
 - 仓库本身既是**代码**也是**数据**：`app/`（Node 服务+网页）、`bin/psl.js`（CLI）、`library/`（slides/decks/taxonomy/themes）、`events/<user>/<YYYY-MM>.jsonl`（按人分开的使用/修改日志）。

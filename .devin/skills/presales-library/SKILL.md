@@ -30,6 +30,7 @@ allowed-tools:
 - 旧 PPTX：`psl import-pptx <file.pptx> --title "标题" --slug <英文短名>`
   - 主标题会转成 HTML 文字，整页渲染成一张图（Mac 用 PowerPoint，首次会弹"授予访问权限"，请提醒用户点允许；Windows 用 PowerPoint COM；否则用 LibreOffice）。
   - 原 PPT 的隐藏页也会入库（meta `source.hidden: true`）。
+  - PPTX / PDF 默认**不入库封面、封底、目录、人员介绍页**（配置了模型用 AI 识别，否则按规则）；输出的 `skipped` 列出被去掉的页，请告诉用户。用户要求全部保留时加 `--keep-all`。
   - 已入库的 deck 有缺图页（`source.image: false`）时，不要重新导入（会产生重复 deck），用同一份 PPTX 补图：`psl repair-images <deckId> <file.pptx>`（页面 id、标签、血缘不变）。
 - PDF：`psl import-pdf <file.pdf> …`；图片：`psl import-images a.png b.jpg … --title "标题"`（多张合成一个 deck）；或用 `psl ingest <文件>` 按扩展名自动选择。
 - 用户也可以在网页右上角"上传素材"里直接拖拽上传（支持 AI 自动打标）。
@@ -49,7 +50,8 @@ allowed-tools:
 
 ## 2. 拼装 deck（购物车）
 
-用户说"给 XX 行拼一个代发交流的 deck"时：
+用户说"给 XX 行拼一个代发交流的 deck"，或给出一段 storyline / 需求时：
+0. 先跑 `psl suggest "<storyline 或需求原文>" [--customer 客户] [--pages 目标页数]`：按章节返回推荐页面（`sections[].picks` 含 id 和理由）、每章备选（`alternatives`）和缺口（`gap`，库里没有合适页面）。以此为初稿，再按需补充检索。网页上对应"按需求推荐"按钮。
 1. 拆出检索条件，用 `psl search <关键词…> [--filter '{"条线":["零售"],"目标客户":["股份行"]}'] --limit 30` 检索；可多次检索不同角度（封面、方法论、案例、数据）。
 2. 按讲述逻辑（封面 → 洞察/痛点 → 方法论 → 方案/融合一页 → 案例 → 总结）给出页面清单表格（序号、标题、id、来源、用过几次），**先请用户确认**。
 3. 确认后创建草稿：`psl draft create --name "<deck 名>" --customer "<客户>" --theme dark|light --slides id1,id2,…`
@@ -78,14 +80,20 @@ allowed-tools:
 - 讲完效果好：`psl promote <draftId> [--keys k1,k2] --note "效果说明"` → 改过的页成为"微调"新页（`parent_id` 指向原页），新建页成为"原创"。
   之后对输出中 `tagged:false` 的新页按第 1 节打标。
 
-## 5. 统计与追溯
+## 5. 删除素材页（仅管理员）
+
+- 管理员名单在 `library/admins.json`（邮箱），服务器模式下 `role=admin` 的账号也是管理员。目前管理员是 Ashley。
+- `psl delete <slideId …> --reason "原因"`：从库中删除页面并从所属 deck 摘除（deck 空了会一并删除），记一条 `delete` 事件；可从 Git 历史找回。
+- 删除前先把要删的页面清单（标题、用过几次、是否有微调版本）给用户确认；非管理员请让用户联系管理员。
+
+## 6. 统计与追溯
 
 - `psl stats`：页面使用排行（导出次数、使用人、讲给哪些客户、被临时修改次数）和客户案例热度。
 - `psl history <slideId>`：版本树（原创 → 微调）、每次临时修改的记录，以及每次 AI 改写（`ai_edits`：要求、模型、改动）。
 - `psl show <slideId>`：元数据、HTML 文件路径、版本树。
 - 用中文简洁汇总给用户，必要时用表格。
 
-## 6. 同步与排错
+## 7. 同步与排错
 
 - `psl sync`：拉取别人更新并推送本地积压的提交。冲突或推送失败时，把 JSON 中的 `error` 告诉用户，不要强推（`--force`）、不要改写历史。
 - 草稿（`drafts/`）和导出文件（`exports/`）只在本机，不进仓库；素材、标签、使用日志（`events/<用户>/`）进仓库。

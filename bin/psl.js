@@ -13,9 +13,11 @@ const HELP = `psl —— 售前素材库命令行（所有输出为 JSON）
   psl serve --server [--host 0.0.0.0]        服务器模式：多人通过网址访问，需账号登录
   psl ingest <文件>                           按扩展名自动入库（PPTX / PDF / 图片 / HTML）
   psl ingest-html <deck.html> [--title T] [--customer C] [--theme dark|light] [--slug ascii-slug] [--report-type 交流]
-  psl import-pptx <deck.pptx> [同上参数]       旧 PPTX 入库：HTML 主标题 + 整页图
+  psl import-pptx <deck.pptx> [同上参数]       旧 PPTX 入库：HTML 主标题 + 整页图；默认去掉封面/封底/目录/人员介绍页（--keep-all 全部保留）
   psl import-pdf <file.pdf> [同上参数]         PDF 入库：每页整页图 + 提取的文字
   psl import-images <a.png> [b.jpg …] [同上参数]  图片入库：每张一页
+  psl delete <slideId …> [--reason 原因]      删除素材页（仅管理员，见 library/admins.json；可从 git 历史找回）
+  psl suggest "storyline / 需求" [--file brief.txt] [--customer C] [--pages 12]   按需求推荐页面组合（按章节给出页面和理由）
   psl repair-images <deckId> <deck.pptx>      已入库 PPTX deck 有缺图页时，用同一份 PPTX 补全整页图（id/标签/血缘不变）
   psl ai-tag [slideId …]                     AI 自动打标（默认对所有待打标页）
 AI 与配置
@@ -58,7 +60,7 @@ function parseArgs(argv) {
 }
 const out = (o) => console.log(JSON.stringify(o, null, 2));
 const list = (s) => (typeof s === 'string' ? s.split(',').map((x) => x.trim()).filter(Boolean) : []);
-const ingestOpts = (o) => ({ title: o.title, customer: o.customer, theme: o.theme, slug: o.slug, reportType: o['report-type'] });
+const ingestOpts = (o) => ({ title: o.title, customer: o.customer, theme: o.theme, slug: o.slug, reportType: o['report-type'], skipBoilerplate: !o['keep-all'] });
 
 async function doctor() {
   const checks = [];
@@ -182,6 +184,8 @@ async function main() {
       case 'ai-rewrite': { const { rewriteSlide } = await import('../app/lib/ai.js'); return out(await rewriteSlide(pos[0], pos[1], opt.instruction || pos.slice(2).join(' '))); }
       case 'ai-undo': { const { undoAiEdit } = await import('../app/lib/ai.js'); return out(undoAiEdit(pos[0], pos[1])); }
       case 'ingest-html': { const { ingestHtml } = await import('../app/lib/ingest.js'); return out(await ingestHtml(pos[0], ingestOpts(opt))); }
+      case 'delete': { const { deleteSlides } = await import('../app/lib/admin.js'); return out(deleteSlides(pos, { reason: opt.reason || '' })); }
+      case 'suggest': { const { suggestDeck } = await import('../app/lib/suggest.js'); return out(await suggestDeck({ brief: opt.file ? fs.readFileSync(opt.file, 'utf8') : pos.join(' '), customer: opt.customer || '', pages: Number(opt.pages) || 0 })); }
       case 'repair-images': { const { repairPptxImages } = await import('../app/lib/ingest.js'); return out(await repairPptxImages(pos[0], pos[1])); }
       case 'import-pptx': { const { importPptx } = await import('../app/lib/ingest.js'); return out(await importPptx(pos[0], ingestOpts(opt))); }
       case 'render-thumbs': {

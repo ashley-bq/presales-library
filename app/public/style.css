@@ -18,6 +18,8 @@ a { color: var(--accent); }
 .btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .btn.sm { padding: 3px 10px; font-size: 12px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.danger { color: var(--red); border-color: rgba(255,107,107,.45); background: transparent; }
+.btn.danger:hover { background: rgba(255,107,107,.12); border-color: var(--red); }
 .input { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 12px; outline: none; }
 .input:focus { border-color: var(--accent); }
 
@@ -84,8 +86,8 @@ a { color: var(--accent); }
 .cart .actions .primary { flex: 1; }
 
 /* 抽屉 / 弹窗 */
-.drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 20; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 92vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 21; overflow: auto; padding: 18px 22px 60px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 92vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 41; overflow: auto; padding: 18px 22px 60px; }
 .drawer h2 { margin: 0 0 6px; font-size: 18px; }
 .sec { margin-top: 20px; }
 .sec h4 { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
@@ -157,3 +159,21 @@ table.t tr.click { cursor: pointer; } table.t tr.click:hover td { background: va
 #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 50; display: grid; gap: 8px; }
 #toast div { background: #26292f; border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.4); max-width: 640px; }
 #toast div.err { border-color: var(--red); }
+
+/* 按需求推荐 */
+.modal.wide { width: min(1400px, 96vw); max-height: 92vh; }
+.sg-out { display: grid; gap: 14px; }
+.sg-sec { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; background: var(--panel-2); }
+.sg-h { display: flex; gap: 10px; align-items: baseline; }
+.sg-h .no { background: var(--accent); color: #151515; font-weight: 700; border-radius: 6px; padding: 0 8px; }
+.sg-gap { color: var(--accent); font-size: 13px; }
+.sg-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.sg-pick { border: 1px solid var(--line-2); border-radius: 10px; padding: 8px; display: grid; gap: 6px; opacity: .55; transition: .15s; }
+.sg-pick.on { opacity: 1; border-color: var(--accent); }
+.sg-pick .tb, .sg-alt-i .tb { aspect-ratio: 16/9; background: #0b0c0e center/cover no-repeat; border: 1px solid var(--line-2); border-radius: 6px; cursor: zoom-in; }
+.sg-pick label { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.sg-alt summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.sg-alts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.sg-alt-i { cursor: pointer; font-size: 12px; display: grid; gap: 4px; color: var(--text-2); }
+.sg-alt-i .tb { cursor: copy; }
+.sg-alt-i:hover span { color: var(--accent); }
