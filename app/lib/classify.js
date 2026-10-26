@@ -41,9 +41,10 @@ export async function classifyPages(pages) {
       { role: 'system', content: `你在整理银行售前 PPT，要从素材库里剔除没有复用价值的页面。逐页判断是否属于以下四类：
 - cover：封面（deck 标题、客户名、日期、公司 logo 的首页）
 - toc：目录 / 议程 / 汇报提纲
-- back：封底（谢谢、Q&A、联系我们、公司简介 boilerplate、免责声明）
-- people：人员介绍（参会人员、团队成员、讲师/专家简介、联系人名片）
-只判这四类，宁可漏判也不要误判：章节过渡页、方法论、案例、数据、产品介绍、讨论问题页都不属于这四类。
+- back：封底（谢谢、Q&A、联系我们、结尾处的法律声明 / 英文 boilerplate / 免责声明）
+- people：人员介绍（参会人员、具体某个人的简历 / 联系方式名片）
+只判这四类，宁可漏判也不要误判：章节过渡页、方法论、案例、数据、产品介绍、讨论问题页都不属于这四类；
+公司介绍 / 资质 / 客户名单 / 团队整体能力介绍（"关于XX""XX团队：专注于…"）是可复用的资质页，不要判为 back 或 people。
 只输出 JSON：{"skip":[{"page":页码,"kind":"cover|toc|back|people"}]}` },
       { role: 'user', content: list },
     ], { temperature: 0, timeoutMs: 90000 });
