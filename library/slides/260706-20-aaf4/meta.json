@@ -22,9 +22,10 @@
     "image": true
   },
   "theme": "light",
-  "tagged": false,
+  "tagged": true,
   "author": "Ashley <ashleyxu0926@gmail.com>",
   "created_at": "2026-10-26T07:50:02.016Z",
   "content_hash": "5355f05e799826c025bf789f3e52d840c0839d26",
-  "deck_title": "数字化变革与营销 260706"
+  "deck_title": "数字化变革与营销 260706",
+  "tag_source": "ai"
 }
